@@ -72,6 +72,11 @@ def node_check_intent(state: QAState) -> dict:
         2. Or does it require deep line-item/itemized text inspection from individual original documents? (e.g. specific item serial numbers, itemized prices, warranty terms, full street addresses).
         3. If vector search IS needed, inspect the Global Summary Matrix to see how many matching invoice files exist for this specific vendor/topic, and select an optimal top_k integer (e.g. 5, 10, 15, or exact matching count).
 
+        Field rules for the matrix (it carries subtotal, tax, discount and uploaded_at columns):
+        - subtotal is the bill amount BEFORE tax; total_amount is the grand total. Never report total_amount as the subtotal. If subtotal is 0 or missing, say "not extracted".
+        - "last uploaded" / "most recent" / "last N" questions sort by uploaded_at descending, NEVER by invoice_date. invoice_date is only for "latest by invoice date" questions.
+        - direct_answer may only state facts the matrix shows verbatim (single-invoice fields, vendor lists). Never compute sums, averages, or counts yourself.
+
         Return ONLY a JSON response:
         {{
             "can_answer_from_matrix": true/false,
@@ -167,6 +172,12 @@ def node_synthesize_answer(state: QAState) -> dict:
         You are an expert Invoice QA Agent.
         Answer the user's question using the Global Summary Matrix, Detailed Invoice Chunks, and Conversation History below.
         Use whatever currency is specified in the invoices ($, ₹, €, etc.) properly. Always present clean vendor names without raw dictionary syntax.
+
+        Field rules:
+        - subtotal is the bill amount BEFORE tax; total_amount is the grand total. Never report total_amount as the subtotal. If subtotal is 0 or missing, say "not extracted".
+        - "last uploaded" / "most recent" / "last N" questions sort by uploaded_at descending, NEVER by invoice_date.
+        - Never compute sums, averages, or counts from the matrix or chunks yourself: state only what the data shows verbatim.
+        - If a vendor name in the question matches more than one vendor in the matrix, list each matching vendor's figures separately and ask which one the user meant. Never merge them into one number silently.
 
         Global Summary Matrix:
         {matrix}

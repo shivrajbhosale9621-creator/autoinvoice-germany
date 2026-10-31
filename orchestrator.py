@@ -91,6 +91,7 @@ You have access to the following specialist tools:
 2. **extract_data_ocr**: Processes invoice files, extracts invoice information using OCR, and stores the extracted data through the existing invoice-processing pipeline.
 3. **generate_excel**: Generates Excel reports based on user requirements, including date ranges, seller names, invoice totals, and other relevant filters.
 4. **generate_graph**: Generates charts and visualizations based on invoice data and the user's requested analysis.
+5. **invoice_aggregate**: Computes EXACT counts, sums, averages, and breakdowns in Python over stored invoices. Mandatory for every totals/counts/averages/exclusions/recency question (see section 6). Never do arithmetic yourself.
 
 Use each tool according to its purpose. Do not call every tool for every request.
 
@@ -104,6 +105,33 @@ Use each tool according to its purpose. Do not call every tool for every request
 - Preserve the user's requested metrics, filters, date ranges, and output formats.
 - If essential information is missing, ask a concise clarifying question rather than making assumptions.
 - Supply each tool with the correct arguments required by its interface.
+
+## 6. Exact Numbers: Always Use `invoice_aggregate`
+
+`invoice_aggregate` computes exact counts, sums, averages, and breakdowns in
+Python over the user's stored invoices. Use it for ANY question involving:
+totals ("total spend", "how much in total"), counts ("how many invoices",
+"how many unpaid"), averages, per-vendor or per-status sums, exclusions
+("excluding Sharma", "other than NexGen"), and recency ("last uploaded",
+"most recent", "last 3 invoices").
+
+- NEVER add up amounts yourself from the summary matrix or from retrieved
+  chunks, and NEVER estimate a total from a few retrieved invoices. Call
+  `invoice_aggregate` and quote its numbers verbatim.
+- For recency questions ("last uploaded", "most recent N"), pass
+  {"sort": "uploaded_at_desc", "limit": N}. `uploaded_at` is the ingestion
+  timestamp and is the ONLY correct ordering for "last uploaded". Do NOT
+  sort by invoice_date for recency questions.
+- For "last but one" / "second most recent", request limit 2 and take the
+  second entry.
+- For before-tax questions, use the tool's "subtotal" field. If subtotal is
+  0 or missing for an invoice, say "not extracted" - NEVER report
+  total_amount as the subtotal.
+- If the tool's "disambiguation" field says a vendor filter matched multiple
+  vendors, present each vendor's total separately and ask the user which one
+  they meant. NEVER merge them into one number silently.
+- After getting the tool result, you may call `answer_invoice_question` for
+  surrounding context, but the numbers must come from `invoice_aggregate`.
 
 ## 3. Parallel Tool Execution
 
@@ -366,7 +394,130 @@ class MainOrchestrator:
                     chart_tags += f"\n[CHART: {cp}]"
             return f"[{status}] {msg}{chart_tags}"
 
-        return [answer_invoice_question, extract_data_ocr, generate_excel, generate_graph]
+        @tool
+        def invoice_aggregate(filter_json: str) -> str:
+            """Compute EXACT invoice statistics in Python over the user's stored invoices.
+
+            Use this for ANY question about totals, counts, averages, sums,
+            per-vendor or per-status breakdowns, exclusions, or recency.
+            NEVER add up amounts yourself; ALWAYS call this tool and quote
+            its numbers verbatim.
+
+            filter_json: JSON object, all keys optional:
+              - "vendor": substring matched case-insensitively against vendor_name
+              - "payment_status": e.g. "Paid", "Unpaid", "Pending", "Overdue"
+              - "date_from", "date_to": "YYYY-MM-DD" bounds on invoice_date (inclusive)
+              - "sort": "uploaded_at_desc" to list most recently uploaded first
+              - "limit": max invoices to list (use with sort)
+
+            Returns JSON with count, total_amount, subtotal, tax, discount,
+            average_total, by_vendor and by_status breakdowns, and (when a
+            limit is set) the matching invoice list.
+            """
+            import json as _json
+            try:
+                f = _json.loads(filter_json) if isinstance(filter_json, str) else dict(filter_json or {})
+            except Exception:
+                return _json.dumps({"error": "filter_json must be valid JSON"})
+            if not isinstance(f, dict):
+                return _json.dumps({"error": "filter_json must be a JSON object"})
+
+            from vector_store import get_all_invoices, normalize_invoice_data
+
+            def _num(x):
+                try:
+                    return float(x or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            def _ts_key(inv):
+                # Sortable upload-time key; records without a timestamp sort last.
+                ts = str(inv.get("uploaded_at") or "").strip()
+                if not ts:
+                    return (1, "")
+                return (0, ts)
+
+            vendor_q = str(f.get("vendor") or "").strip().lower()
+            status_q = str(f.get("payment_status") or "").strip().lower()
+            date_from = str(f.get("date_from") or "").strip()
+            date_to = str(f.get("date_to") or "").strip()
+            sort = str(f.get("sort") or "").strip()
+            try:
+                limit = int(f.get("limit") or 0)
+            except (TypeError, ValueError):
+                limit = 0
+
+            recs = []
+            for inv in get_all_invoices(user_id=self.user_id):
+                norm = normalize_invoice_data(inv, file_name=inv.get("file_name", ""))
+                vendor = str(norm.get("vendor_name") or "")
+                status = str(norm.get("payment_status") or "")
+                inv_date = str(norm.get("invoice_date") or "")
+                if vendor_q and vendor_q not in vendor.lower():
+                    continue
+                if status_q and status_q != status.lower():
+                    continue
+                if date_from and inv_date < date_from:
+                    continue
+                if date_to and inv_date > date_to:
+                    continue
+                recs.append({
+                    "invoice_number": str(norm.get("invoice_number") or ""),
+                    "vendor_name": vendor,
+                    "invoice_date": inv_date,
+                    "total_amount": _num(norm.get("total_amount")),
+                    "subtotal": _num(norm.get("subtotal")),
+                    "tax": _num(norm.get("tax")),
+                    "discount": _num(norm.get("discount")),
+                    "payment_status": status,
+                    "uploaded_at": str(inv.get("uploaded_at") or ""),
+                })
+
+            if sort == "uploaded_at_desc":
+                recs.sort(key=_ts_key)
+
+            total = round(sum(r["total_amount"] for r in recs), 2)
+            subtotal = round(sum(r["subtotal"] for r in recs), 2)
+            tax = round(sum(r["tax"] for r in recs), 2)
+            discount = round(sum(r["discount"] for r in recs), 2)
+            count = len(recs)
+
+            by_vendor = {}
+            for r in recs:
+                v = r["vendor_name"] or "Unknown"
+                b = by_vendor.setdefault(v, {"count": 0, "total_amount": 0.0})
+                b["count"] += 1
+                b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
+
+            by_status = {}
+            for r in recs:
+                s = r["payment_status"] or "Unknown"
+                b = by_status.setdefault(s, {"count": 0, "total_amount": 0.0})
+                b["count"] += 1
+                b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
+
+            result = {
+                "count": count,
+                "total_amount": total,
+                "subtotal": subtotal,
+                "tax": tax,
+                "discount": discount,
+                "average_total": round(total / count, 2) if count else 0.0,
+                "by_vendor": by_vendor,
+                "by_status": by_status,
+            }
+            if limit > 0:
+                result["invoices"] = recs[:limit]
+            if vendor_q and len(by_vendor) > 1:
+                result["disambiguation"] = (
+                    f"vendor filter '{vendor_q}' matched {len(by_vendor)} vendors: "
+                    + ", ".join(sorted(by_vendor))
+                    + ". Present each vendor's total separately and ask the user which one "
+                    "they meant. Do NOT report the merged total as the answer."
+                )
+            return _json.dumps(result)
+
+        return [answer_invoice_question, extract_data_ocr, generate_excel, generate_graph, invoice_aggregate]
 
     # ─────────────────────────── Public API ──────────────────────────
 

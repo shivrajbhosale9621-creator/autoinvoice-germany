@@ -591,6 +591,8 @@ function updateDashboardMetrics(invoices) {
   if (elTotalCount) elTotalCount.textContent = totalCount.toString();
   if (elPaidRatio) elPaidRatio.textContent = `${paidRatio}%`;
   if (elVendorsCount) elVendorsCount.textContent = vendors.size.toString();
+  const elUnpaidCount = document.getElementById("stat-unpaid-count");
+  if (elUnpaidCount) elUnpaidCount.textContent = `${unpaidCount} OUTSTANDING / DUE`;
 
   // Keep currency labels in sync with the data's dominant currency
   const domCur = dominantCurrency(invoices) || "INR";
@@ -641,6 +643,7 @@ function renderRecentInvoices(invoices) {
 function renderLedgerTable(invoices) {
   const tbody = document.getElementById("ledger-table-body");
   const countEl = document.getElementById("ledger-records-count");
+  const filedEl = document.getElementById("ledger-filtered-count");
   if (!tbody) return;
 
   let filtered = [...invoices];
@@ -669,6 +672,7 @@ function renderLedgerTable(invoices) {
   }
 
   if (countEl) countEl.textContent = `${filtered.length} RECORD${filtered.length === 1 ? "" : "S"}`;
+  if (filedEl) filedEl.textContent = `${filtered.length} ${filtered.length === 1 ? "ENTRY" : "ENTRIES"} FILED`;
 
   if (filtered.length === 0) {
     tbody.innerHTML = `

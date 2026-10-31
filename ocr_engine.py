@@ -11,6 +11,7 @@ Handles end-to-end invoice processing:
 import os
 import re
 import json
+import logging
 import numpy as np
 import cv2
 import fitz  # PyMuPDF
@@ -232,9 +233,12 @@ def structure_invoice_json(ocr_text: str) -> dict:
 	Pass raw OCR text to Groq LLM with concise dynamic schema instructions.
 
 	Reliability contract: this function NEVER fabricates an empty invoice.
-	It retries on rate limits AND on unparseable/empty outputs, and raises
+	It retries on transient failures and unparseable/empty outputs, and raises
 	StructuringError when every attempt fails, so the caller can reject the
 	upload instead of silently storing an 'Unknown Vendor / 0' record.
+	It never retries on 429 rate limits (they do not clear by retrying), and
+	all StructuringError messages are user-safe: raw provider internals are
+	logged server-side only, never returned to the caller.
 	"""
 	if not ocr_text.strip():
 		raise StructuringError("No text could be extracted from the document.")
@@ -248,7 +252,7 @@ def structure_invoice_json(ocr_text: str) -> dict:
 
 	prompt = ChatPromptTemplate.from_template(
 		'''You are a document-structuring AI. Convert this invoice OCR text into clean JSON.
-Extract: invoice_number, vendor_name, total_amount (numeric), invoice_date (YYYY-MM-DD), due_date, payment_status, currency (default "INR"), line_items array.
+Extract: invoice_number, vendor_name, total_amount (grand total, numeric), subtotal (bill amount before tax, numeric, 0 if not shown), tax (total tax amount, numeric, 0 if not shown), discount (numeric, 0 if not shown), invoice_date (YYYY-MM-DD), due_date, payment_status, currency (default "INR"), line_items array.
 Return ONLY valid JSON with no markdown backticks.
 
 OCR TEXT:
@@ -259,31 +263,33 @@ OCR TEXT:
 
 	max_retries = 3
 	delay = 1.5
-	last_error = "unknown error"
 
 	for attempt in range(max_retries):
 		try:
 			raw_content = _run_structuring_chain(chain, ocr_text)
 		except Exception as exc:
 			err_str = str(exc).lower()
-			last_error = str(exc)
+			logger.warning("Structuring attempt %d failed: %s", attempt + 1, str(exc)[:300])
+			if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str or "tokens per day" in err_str:
+				# Rate limits never clear by retrying immediately: fail fast with a
+				# user-safe message instead of burning the daily token budget.
+				raise StructuringError("The AI structuring service is rate-limited right now. Please wait a few minutes and try again.")
 			if attempt < max_retries - 1:
-				# Back off for transient failures (rate limits, network blips)
-				time.sleep(delay if ("429" in err_str or "rate" in err_str or "token" in err_str) else 1.0)
+				# Back off only for transient failures (network blips, 5xx)
+				time.sleep(delay)
 				delay *= 2
 				continue
-			raise StructuringError(f"Structuring service failed after {max_retries} attempts: {last_error}")
+			raise StructuringError("Could not structure this document. Please try again later.")
 
 		parsed = _parse_llm_json(raw_content)
 		if parsed is not None and not _structuring_is_empty(parsed):
 			return parsed
 
-		last_error = "LLM returned unparseable or empty invoice data"
 		if attempt < max_retries - 1:
 			time.sleep(1.0)
 			continue
 
-	raise StructuringError(f"Could not structure invoice after {max_retries} attempts: {last_error}")
+	raise StructuringError("Could not structure this document. The file may not be a readable invoice.")
 
 
 # -------------------------------------------------------------

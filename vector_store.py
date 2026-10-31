@@ -17,6 +17,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import json
 import uuid
 import logging
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 # IMPORTANT: chromadb and its onnxruntime dependency must be imported before pandas/numpy on Windows
@@ -275,8 +276,24 @@ def normalize_invoice_data(raw_data: dict, file_name: str = "") -> dict:
 		if items_sum > 0:
 			total = round(items_sum, 2)
 
-	if subtotal == 0.0 and total > 0 and tax == 0.0:
-		subtotal = total
+	# Never fabricate a subtotal from the grand total: a missed extraction must
+	# stay 0.0 (reported downstream as "not extracted") instead of silently
+	# copying the grand total, which caused before-tax/total swaps in answers.
+	# Honest derivation only: sum the line-item totals when the document did
+	# not state a subtotal explicitly.
+	if subtotal == 0.0 and line_items:
+		derived = 0.0
+		for it in line_items:
+			if isinstance(it, dict):
+				it_total = parse_numeric(it.get("total") or it.get("total_amount") or it.get("amount") or 0.0)
+				if it_total > 0:
+					derived += it_total
+				else:
+					qty = parse_numeric(it.get("quantity") or it.get("qty") or 1.0)
+					price = parse_numeric(it.get("unit_price") or it.get("price") or 0.0)
+					derived += qty * price
+		if derived > 0:
+			subtotal = round(derived, 2)
 
 	currency = find_str("currency", "currency_code", "currency_symbol", default="INR")
 	payment_status = find_str("payment_status", "status", default="Unpaid")
@@ -303,6 +320,39 @@ def normalize_invoice_data(raw_data: dict, file_name: str = "") -> dict:
 # -------------------------------------------------------------
 # 3. Extracting Invoices & Data Normalization
 # -------------------------------------------------------------
+def _sqlite_created_at_map(user_id: Optional[str]) -> Dict[str, str]:
+	"""Map file_name -> created_at for one user's invoices via raw sqlite3.
+
+	Fallback source for the upload timestamp of records indexed before
+	``uploaded_at`` was recorded in ChromaDB metadata. The SQLite
+	``created_at`` column defaults to the ingestion moment and is never
+	updated by re-uploads (the upsert only refreshes content columns), so
+	it preserves the original upload order.
+	"""
+	result: Dict[str, str] = {}
+	try:
+		if not user_id:
+			return result
+		import sqlite3
+		from config import CHAT_DB_PATH
+		conn = sqlite3.connect(CHAT_DB_PATH)
+		try:
+			cur = conn.cursor()
+			u_clean = str(user_id).replace("-", "")
+			cur.execute(
+				"SELECT file_name, created_at FROM invoices WHERE user_id = ?",
+				(u_clean,),
+			)
+			for file_name, created_at in cur.fetchall():
+				if file_name:
+					result[str(file_name)] = str(created_at) if created_at else ""
+		finally:
+			conn.close()
+	except Exception as exc:
+		logger.warning("Could not read invoice created_at map: %s", exc)
+	return result
+
+
 def get_all_invoices(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
 	"""
 	Retrieve all invoice records stored in ChromaDB as a list of normalized dicts.
@@ -327,6 +377,7 @@ def get_all_invoices(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id:
 	metadatas = data.get("metadatas") or []
 
 	invoices = []
+	created_at_map = _sqlite_created_at_map(user_id)
 	for doc_id, doc_text, meta in zip(ids, docs, metadatas):
 		meta = meta or {}
 		# Enforce user filtering in memory as well (strict: docs without a
@@ -355,6 +406,14 @@ def get_all_invoices(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id:
 		res_dict["_doc_id"] = doc_id
 		res_dict["file_name"] = file_name
 
+		# Upload timestamp: the explicit value recorded at ingestion, else the
+		# SQLite row's created_at for records indexed before uploaded_at
+		# existed, else "" (sorted last).
+		uploaded_at = str(meta.get("uploaded_at") or parsed.get("uploaded_at") or "").strip()
+		if not uploaded_at:
+			uploaded_at = created_at_map.get(file_name, "")
+		res_dict["uploaded_at"] = uploaded_at
+
 		invoices.append(res_dict)
 
 	return invoices
@@ -373,7 +432,8 @@ def get_all_invoices_df(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_
 	if not invoices:
 		return pd.DataFrame(columns=[
 			"invoice_number", "vendor_name", "buyer_name",
-			"invoice_date", "total_amount", "currency", "payment_status"
+			"invoice_date", "total_amount", "subtotal", "tax", "discount",
+			"currency", "payment_status", "uploaded_at"
 		])
 
 	records = []
@@ -393,8 +453,12 @@ def get_all_invoices_df(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_
 			"buyer_name": str(buyer).strip(),
 			"invoice_date": str(date).strip(),
 			"total_amount": float(amount),
+			"subtotal": float(norm.get("subtotal") or 0.0),
+			"tax": float(norm.get("tax") or 0.0),
+			"discount": float(norm.get("discount") or 0.0),
 			"currency": str(currency).strip(),
 			"payment_status": str(status).strip(),
+			"uploaded_at": str(inv.get("uploaded_at") or "").strip(),
 		})
 
 	return pd.DataFrame(records)
@@ -499,6 +563,11 @@ def save_invoice_to_vector_store(
 	file_name = os.path.basename(file_path)
 	norm = normalize_invoice_data(structured_json, file_name=file_name)
 
+	# Ingestion moment, recorded once and never updated: the source of truth
+	# for "last uploaded / most recent" questions.
+	uploaded_at = datetime.now(timezone.utc).isoformat()
+	norm["uploaded_at"] = uploaded_at
+
 	inv_num = norm["invoice_number"]
 	seller = norm["vendor_name"]
 	buyer = norm["buyer_name"]
@@ -516,8 +585,12 @@ def save_invoice_to_vector_store(
 		"buyer_name": str(buyer).strip(),
 		"invoice_date": str(date).strip(),
 		"total_amount": float(grand_total),
+		"subtotal": float(norm.get("subtotal") or 0.0),
+		"tax": float(norm.get("tax") or 0.0),
+		"discount": float(norm.get("discount") or 0.0),
 		"currency": str(currency).strip(),
 		"payment_status": str(status).strip(),
+		"uploaded_at": uploaded_at,
 		"user_id": str(user_id) if user_id else "",
 	}
 
