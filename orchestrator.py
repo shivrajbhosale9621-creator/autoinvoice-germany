@@ -91,7 +91,7 @@ You have access to the following specialist tools:
 2. **extract_data_ocr**: Processes invoice files, extracts invoice information using OCR, and stores the extracted data through the existing invoice-processing pipeline.
 3. **generate_excel**: Generates Excel reports based on user requirements, including date ranges, seller names, invoice totals, and other relevant filters.
 4. **generate_graph**: Generates charts and visualizations based on invoice data and the user's requested analysis.
-5. **invoice_aggregate**: Computes EXACT counts, sums, averages, and breakdowns in Python over stored invoices. Mandatory for every totals/counts/averages/exclusions/recency question (see section 6). Never do arithmetic yourself.
+5. **invoice_aggregate**: Computes EXACT counts, sums, averages, breakdowns, and per-vendor line-item unit prices in Python over stored invoices. Mandatory for every totals/counts/averages/exclusions/recency/line-item-rate question (see section 6). Never do arithmetic yourself.
 
 Use each tool according to its purpose. Do not call every tool for every request.
 
@@ -112,8 +112,9 @@ Use each tool according to its purpose. Do not call every tool for every request
 Python over the user's stored invoices. Use it for ANY question involving:
 totals ("total spend", "how much in total"), counts ("how many invoices",
 "how many unpaid"), averages, per-vendor or per-status sums, exclusions
-("excluding Sharma", "other than NexGen"), and recency ("last uploaded",
-"most recent", "last 3 invoices").
+("excluding Sharma", "other than NexGen"), recency ("last uploaded",
+"most recent", "last 3 invoices"), and line-item rates ("at what rate is
+the Wireless Mouse sold by each vendor", "price per vendor for item X").
 
 - NEVER add up amounts yourself from the summary matrix or from retrieved
   chunks, and NEVER estimate a total from a few retrieved invoices. Call
@@ -130,6 +131,12 @@ totals ("total spend", "how much in total"), counts ("how many invoices",
 - If the tool's "disambiguation" field says a vendor filter matched multiple
   vendors, present each vendor's total separately and ask the user which one
   they meant. NEVER merge them into one number silently.
+- For line-item rate/price questions, pass {"line_item": "<product name>"}
+  (optionally combined with "vendor" to narrow to one seller). The tool
+  returns per-vendor unit_prices computed in Python: quote each vendor's
+  prices verbatim, one vendor at a time, never merged. If the tool returns
+  no matching vendors, say the item was not found - never invent a rate,
+  and never ask the user to narrow down a question the tool already answered.
 - After getting the tool result, you may call `answer_invoice_question` for
   surrounding context, but the numbers must come from `invoice_aggregate`.
 
@@ -247,6 +254,71 @@ Interpret follow-up requests using relevant earlier messages, decisions, and too
 
 Act as an intelligent coordinator between the user and the specialist agents. Understand the current request in the context of the conversation, route it to the correct tools, execute independent tasks concurrently whenever possible, respect task dependencies, and deliver accurate, consistent results.
 """
+
+
+def _line_item_rates(entries, item_q):
+    """Aggregate matching line items by vendor, in Python.
+
+    entries: list of (vendor_name, line_items) tuples, already filtered.
+    item_q: substring matched case-insensitively against the item description.
+
+    Returns a dict with per-vendor distinct unit prices plus match stats.
+    Line-item dicts use varied key names across documents, so description is
+    read from name/description/desc/item/item_name/product and the unit price
+    from rate/unit_price/price/unit_rate.
+    """
+    q = str(item_q or "").strip().lower()
+    vendors = {}
+    total_lines = 0
+    invoices_with_match = 0
+
+    def _fnum(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    for vendor, items in entries:
+        if not isinstance(items, list):
+            continue
+        matched_here = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            desc = str(
+                it.get("name") or it.get("description") or it.get("desc")
+                or it.get("item") or it.get("item_name") or it.get("product") or ""
+            )
+            if q not in desc.lower():
+                continue
+            price = it.get("rate")
+            if price is None:
+                price = it.get("unit_price")
+            if price is None:
+                price = it.get("price")
+            if price is None:
+                price = it.get("unit_rate")
+            price = _fnum(price)
+            if price is not None:
+                price = round(price, 2)
+            qty = _fnum(it.get("qty") if it.get("qty") is not None else it.get("quantity"))
+            v = vendor or "Unknown"
+            b = vendors.setdefault(v, {"unit_prices": [], "matching_lines": 0})
+            if price is not None and price not in b["unit_prices"]:
+                b["unit_prices"].append(price)
+                b["unit_prices"].sort()
+            b["matching_lines"] += 1
+            matched_here += 1
+            total_lines += 1
+        if matched_here:
+            invoices_with_match += 1
+    return {
+        "mode": "line_item",
+        "line_item_query": str(item_q or "").strip(),
+        "vendors": vendors,
+        "total_matching_lines": total_lines,
+        "invoices_with_match": invoices_with_match,
+    }
 
 
 class MainOrchestrator:
@@ -399,7 +471,8 @@ class MainOrchestrator:
             """Compute EXACT invoice statistics in Python over the user's stored invoices.
 
             Use this for ANY question about totals, counts, averages, sums,
-            per-vendor or per-status breakdowns, exclusions, or recency.
+            per-vendor or per-status breakdowns, exclusions, recency, or the
+            rate/price of a specific line item (product) per vendor.
             NEVER add up amounts yourself; ALWAYS call this tool and quote
             its numbers verbatim.
 
@@ -409,10 +482,16 @@ class MainOrchestrator:
               - "date_from", "date_to": "YYYY-MM-DD" bounds on invoice_date (inclusive)
               - "sort": "uploaded_at_desc" to list most recently uploaded first
               - "limit": max invoices to list (use with sort)
+              - "line_item": substring matched case-insensitively against line-item
+                descriptions, e.g. "Wireless Mouse". When set, the tool switches
+                to line-item mode and returns per-vendor unit prices for the
+                matching items instead of invoice-level totals. Combine with
+                "vendor" to narrow to one seller.
 
             Returns JSON with count, total_amount, subtotal, tax, discount,
             average_total, by_vendor and by_status breakdowns, and (when a
-            limit is set) the matching invoice list.
+            limit is set) the matching invoice list. In line-item mode returns
+            mode="line_item" with per-vendor unit_prices and match stats.
             """
             import json as _json
             try:
@@ -430,24 +509,19 @@ class MainOrchestrator:
                 except (TypeError, ValueError):
                     return 0.0
 
-            def _ts_key(inv):
-                # Sortable upload-time key; records without a timestamp sort last.
-                ts = str(inv.get("uploaded_at") or "").strip()
-                if not ts:
-                    return (1, "")
-                return (0, ts)
-
             vendor_q = str(f.get("vendor") or "").strip().lower()
             status_q = str(f.get("payment_status") or "").strip().lower()
             date_from = str(f.get("date_from") or "").strip()
             date_to = str(f.get("date_to") or "").strip()
             sort = str(f.get("sort") or "").strip()
+            item_q = str(f.get("line_item") or "").strip()
             try:
                 limit = int(f.get("limit") or 0)
             except (TypeError, ValueError):
                 limit = 0
 
             recs = []
+            line_entries = []  # (vendor_name, line_items) for line-item mode
             for inv in get_all_invoices(user_id=self.user_id):
                 norm = normalize_invoice_data(inv, file_name=inv.get("file_name", ""))
                 vendor = str(norm.get("vendor_name") or "")
@@ -461,6 +535,9 @@ class MainOrchestrator:
                     continue
                 if date_to and inv_date > date_to:
                     continue
+                if item_q:
+                    line_entries.append((vendor, norm.get("line_items") or []))
+                    continue
                 recs.append({
                     "invoice_number": str(norm.get("invoice_number") or ""),
                     "vendor_name": vendor,
@@ -473,8 +550,15 @@ class MainOrchestrator:
                     "uploaded_at": str(inv.get("uploaded_at") or ""),
                 })
 
+            if item_q:
+                # Line-item mode: per-vendor unit prices for the matching
+                # product, computed in Python. Never merge vendors.
+                return _json.dumps(_line_item_rates(line_entries, item_q))
+
             if sort == "uploaded_at_desc":
-                recs.sort(key=_ts_key)
+                # Newest first. Records without a timestamp ("") sort last
+                # because "" compares smaller than any real timestamp string.
+                recs.sort(key=lambda r: str(r.get("uploaded_at") or "").strip(), reverse=True)
 
             total = round(sum(r["total_amount"] for r in recs), 2)
             subtotal = round(sum(r["subtotal"] for r in recs), 2)
