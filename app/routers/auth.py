@@ -5,22 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Request, Response, Depends, HTTPException, status
-from pydantic import BaseModel, Field
-
-try:
-    import email_validator  # noqa: F401
-    from pydantic import EmailStr
-except ImportError:
-    class EmailStr(str):
-        @classmethod
-        def __get_validators__(cls):
-            yield cls.validate
-
-        @classmethod
-        def validate(cls, v):
-            if not isinstance(v, str) or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v.strip()):
-                raise ValueError("Invalid email address")
-            return v.strip()
+from pydantic import BaseModel, EmailStr, Field
 
 try:
     from sqlalchemy import select, update

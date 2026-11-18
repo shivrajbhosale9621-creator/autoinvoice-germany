@@ -1208,7 +1208,9 @@ function renderInvoiceDetailView(inv) {
     : "";
 
   const viesBadgeClass = inv.vies_status === "valid" ? "paid" : (inv.vies_status === "invalid" ? "failed" : "pending");
-  const viesLabel = inv.vies_status === "valid" ? "VIES GÜLTIG" : (inv.vies_status === "invalid" ? "VIES UNGÜLTIG" : "VIES UNGEPRÜFT");
+  const viesLabel = state.lang === "en"
+    ? (inv.vies_status === "valid" ? "VIES VALID" : (inv.vies_status === "invalid" ? "VIES INVALID" : "VIES UNCHECKED"))
+    : (inv.vies_status === "valid" ? "VIES GÜLTIG" : (inv.vies_status === "invalid" ? "VIES UNGÜLTIG" : "VIES UNGEPRÜFT"));
   const viesTime = inv.vies_checked_at ? formatDateDE(inv.vies_checked_at.slice(0, 10)) : "-";
 
   const itemsRowsHtml = items

@@ -206,10 +206,24 @@ def _parse_vertical_pypdf_items(pypdf_text: str, is_credit_note: bool = False) -
                 qty_str = lines[j]
                 unit_str = lines[j + 1]
                 price_str = lines[j + 2]
-                pe_str = lines[j + 3]
-                rest_1 = lines[j + 4]
-                rest_2 = lines[j + 5] if j + 5 < n else ""
-                rest_3 = lines[j + 6] if j + 6 < n else ""
+                m_merged_price = re.match(r"^([\d]{1,3}(?:\.\d{3})*(?:,\d{1,3})?)\s+(\d{1,4})$", price_str)
+                if m_merged_price:
+                    unit_price_val = parse_numeric(m_merged_price.group(1), 0.0)
+                    price_unit_val = parse_numeric(m_merged_price.group(2), 1.0)
+                    rest_1 = lines[j + 3]
+                    rest_2 = lines[j + 4] if j + 4 < n else ""
+                    rest_3 = lines[j + 5] if j + 5 < n else ""
+                    disc_j_end = j + 6
+                    nodisc_j_end = j + 5
+                else:
+                    pe_str = lines[j + 3]
+                    unit_price_val = parse_numeric(price_str, 0.0)
+                    price_unit_val = parse_numeric(pe_str, 1.0)
+                    rest_1 = lines[j + 4]
+                    rest_2 = lines[j + 5] if j + 5 < n else ""
+                    rest_3 = lines[j + 6] if j + 6 < n else ""
+                    disc_j_end = j + 7
+                    nodisc_j_end = j + 6
 
                 if (
                     re.match(r"^(?:19|7|0)$", rest_3)
@@ -219,12 +233,12 @@ def _parse_vertical_pypdf_items(pypdf_text: str, is_credit_note: bool = False) -
                     disc_val = parse_numeric(rest_1, 0.0)
                     total_val = parse_numeric(rest_2, 0.0)
                     vat_val = parse_numeric(rest_3, 19.0)
-                    j_end = j + 7
+                    j_end = disc_j_end
                 elif re.match(r"^(?:19|7|0)$", rest_2):
                     disc_val = 0.0
                     total_val = parse_numeric(rest_1, 0.0)
                     vat_val = parse_numeric(rest_2, 19.0)
-                    j_end = j + 6
+                    j_end = nodisc_j_end
                 else:
                     i += 1
                     continue
@@ -253,8 +267,8 @@ def _parse_vertical_pypdf_items(pypdf_text: str, is_credit_note: bool = False) -
                     "description": full_desc,
                     "quantity": parse_numeric(qty_str, 1.0),
                     "unit": unit_str,
-                    "unit_price": parse_numeric(price_str, 0.0),
-                    "price_unit": parse_numeric(pe_str, 1.0),
+                    "unit_price": unit_price_val,
+                    "price_unit": price_unit_val,
                     "discount_percent": disc_val,
                     "line_total": total_val,
                     "vat_rate": vat_val,
@@ -262,58 +276,73 @@ def _parse_vertical_pypdf_items(pypdf_text: str, is_credit_note: bool = False) -
                 i = j_end
                 continue
 
-        if (
-            re.match(r"^0\d{2}$", lines[i])
-            and (i + 7 < n)
-            and re.match(r"^[A-Z]{2}-\d{4,6}$", lines[i + 3])
-        ):
-            pos = str(int(lines[i]))
-            qty_val = parse_numeric(lines[i + 1], 1.0)
-            unit_str = lines[i + 2]
-            art_no = lines[i + 3]
-            desc = lines[i + 4]
-            j = i + 5
-            extra_desc = []
-            while j < n and "€" not in lines[j] and not re.search(r"\d,\d", lines[j]):
-                extra_desc.append(lines[j])
-                j += 1
-            if j + 2 < n:
-                price_val = parse_numeric(lines[j], 0.0)
-                vat_val = parse_numeric(lines[j + 1].replace("%", ""), 19.0)
-                total_val = parse_numeric(lines[j + 2], 0.0)
-                disc_val = 0.0
-                j_end = j + 3
-                while j_end < n:
-                    nxt = lines[j_end]
-                    if re.match(r"^0\d{2}$", nxt) or nxt.startswith("Summe netto") or nxt.startswith("Nettobetrag"):
-                        break
-                    m_rab = re.search(r"Sonderrabatt\s+(\d+(?:,\d+)?)\s*%", nxt, flags=re.IGNORECASE)
-                    if m_rab:
-                        disc_val = parse_numeric(m_rab.group(1), 0.0)
-                        if j_end + 1 < n and "-" in lines[j_end + 1]:
-                            rab_amt = parse_numeric(lines[j_end + 1], 0.0)
-                            total_val = round(total_val + rab_amt, 2)
-                            j_end += 2
-                            continue
-                    else:
-                        extra_desc.append(nxt)
-                    j_end += 1
+        if re.match(r"^0\d{2}$", lines[i]):
+            pos = ""
+            qty_val = 1.0
+            unit_str = ""
+            art_no = ""
+            desc = ""
+            j = -1
+            if (i + 7 < n) and re.match(r"^[A-Z]{2}-\d{4,6}$", lines[i + 3]):
+                # Layout A: qty, unit, article, description on separate lines
+                pos = str(int(lines[i]))
+                qty_val = parse_numeric(lines[i + 1], 1.0)
+                unit_str = lines[i + 2]
+                art_no = lines[i + 3]
+                desc = lines[i + 4]
+                j = i + 5
+            elif (i + 6 < n) and re.match(r"^[A-Z]{2}-\d{4,6}$", lines[i + 2]):
+                m_qu = re.match(r"^([\d\.,]+)\s+([A-Za-z]{1,6})$", lines[i + 1])
+                if m_qu:
+                    # Layout B: merged quantity + unit on lines[i + 1]
+                    pos = str(int(lines[i]))
+                    qty_val = parse_numeric(m_qu.group(1), 1.0)
+                    unit_str = m_qu.group(2)
+                    art_no = lines[i + 2]
+                    desc = lines[i + 3]
+                    j = i + 4
+            if j != -1:
+                extra_desc = []
+                while j < n and "€" not in lines[j] and not re.search(r"\d,\d", lines[j]):
+                    extra_desc.append(lines[j])
+                    j += 1
+                if j + 2 < n:
+                    price_val = parse_numeric(lines[j], 0.0)
+                    vat_val = parse_numeric(lines[j + 1].replace("%", ""), 19.0)
+                    total_val = parse_numeric(lines[j + 2], 0.0)
+                    disc_val = 0.0
+                    j_end = j + 3
+                    while j_end < n:
+                        nxt = lines[j_end]
+                        if re.match(r"^0\d{2}$", nxt) or nxt.startswith("Summe netto") or nxt.startswith("Nettobetrag"):
+                            break
+                        m_rab = re.search(r"Sonderrabatt\s+(\d+(?:,\d+)?)\s*%", nxt, flags=re.IGNORECASE)
+                        if m_rab:
+                            disc_val = parse_numeric(m_rab.group(1), 0.0)
+                            if j_end + 1 < n and "-" in lines[j_end + 1]:
+                                rab_amt = parse_numeric(lines[j_end + 1], 0.0)
+                                total_val = round(total_val + rab_amt, 2)
+                                j_end += 2
+                                continue
+                        else:
+                            extra_desc.append(nxt)
+                        j_end += 1
 
-                full_desc = f"{desc} ({', '.join(extra_desc)})" if extra_desc else desc
-                items.append({
-                    "pos": pos,
-                    "article_number": art_no,
-                    "description": full_desc,
-                    "quantity": qty_val,
-                    "unit": unit_str,
-                    "unit_price": price_val,
-                    "price_unit": 1.0,
-                    "discount_percent": disc_val,
-                    "line_total": total_val,
-                    "vat_rate": vat_val,
-                })
-                i = j_end
-                continue
+                    full_desc = f"{desc} ({', '.join(extra_desc)})" if extra_desc else desc
+                    items.append({
+                        "pos": pos,
+                        "article_number": art_no,
+                        "description": full_desc,
+                        "quantity": qty_val,
+                        "unit": unit_str,
+                        "unit_price": price_val,
+                        "price_unit": 1.0,
+                        "discount_percent": disc_val,
+                        "line_total": total_val,
+                        "vat_rate": vat_val,
+                    })
+                    i = j_end
+                    continue
 
         i += 1
 
@@ -409,16 +438,16 @@ def parse_german_invoice_text(ocr_text: str, file_name: str = "") -> Dict[str, A
     buyer_address = "Abt. Kreditorenbuchhaltung, Hafenstraße 88, 47119 Duisburg" if ("duisburg" in full_text.lower() or "dussburg" in full_text.lower() or "dursburg" in full_text.lower()) else ""
 
     m_vat = re.search(r"USt-IdNr\.?\s*(DE\s*\d{9})", full_text, flags=re.IGNORECASE)
-    vat_id = re.sub(r"\s+", "", m_vat.group(1)).upper() if m_vat else ("DE287364519" if vendor_name.startswith("Kessler") else "")
+    vat_id = re.sub(r"\s+", "", m_vat.group(1)).upper() if m_vat else ""
 
     m_tax = re.search(r"Steuer-Nr\.?\s*([\d/]{8,20})", full_text, flags=re.IGNORECASE)
-    tax_number = m_tax.group(1).strip() if m_tax else ("59/012/34567" if vendor_name.startswith("Kessler") else "")
+    tax_number = m_tax.group(1).strip() if m_tax else ""
 
     m_iban = re.search(r"IBAN\s*([A-Z]{2}\d{2}(?:\s*\d{4}){4}\s*\d{2})", full_text)
-    vendor_iban = m_iban.group(1).strip() if m_iban else ("DE30 6129 0120 0457 3310 08" if vendor_name.startswith("Kessler") else "")
+    vendor_iban = m_iban.group(1).strip() if m_iban else ""
 
     m_bic = re.search(r"BIC\s*([A-Z0-9]{8,11})", full_text)
-    vendor_bic = m_bic.group(1).strip() if m_bic else ("GENODES1NUE" if vendor_name.startswith("Kessler") else "")
+    vendor_bic = m_bic.group(1).strip() if m_bic else ""
 
     m_leitweg = re.search(r"Leitweg-ID\s*[:\s]\s*([0-9A-Za-z\-]{8,40})", full_text, flags=re.IGNORECASE)
     leitweg_id = m_leitweg.group(1).strip() if m_leitweg else ""

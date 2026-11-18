@@ -235,6 +235,7 @@ except ImportError:
                         sql += f" LIMIT {stmt.limit_val}"
                     rows = conn.execute(sql, params).fetchall()
                     objs = [stmt.model_cls._from_row(dict(r)) for r in rows]
+                    self._pending_adds.extend(objs)
                     return _QueryResult(objs)
 
                 elif isinstance(stmt, UpdateStmt):
