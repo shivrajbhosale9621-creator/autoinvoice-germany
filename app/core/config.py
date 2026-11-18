@@ -1,42 +1,60 @@
 from typing import Optional, Any
 import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
+
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+    _HAS_PYDANTIC_SETTINGS = True
+except ImportError:
+    from pydantic import BaseSettings
+    SettingsConfigDict = None
+    _HAS_PYDANTIC_SETTINGS = False
 
 
 class Settings(BaseSettings):
     # Brevo API configuration
-    BREVO_API_KEY: str = ""
-    BREVO_SENDER_EMAIL: str = "noreply@autoinvoice.com"
-    BREVO_SENDER_NAME: str = "AutoInvoice Ledger"
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    BREVO_SENDER_EMAIL: str = os.getenv("BREVO_SENDER_EMAIL", "noreply@autoinvoice.de")
+    BREVO_SENDER_NAME: str = os.getenv("BREVO_SENDER_NAME", "AutoInvoice Buchhaltung")
 
     # JWT & Auth configuration
-    JWT_SECRET: str = "autoinvoice_jwt_super_secret_key_change_me_in_production_32bytes"
-    JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    JWT_SECRET: str = os.getenv(
+        "JWT_SECRET",
+        "autoinvoice_jwt_super_secret_key_change_me_in_production_32bytes",
+    )
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
     # Cookie security flag (False for local development over HTTP, True for production HTTPS)
-    COOKIE_SECURE: bool = False
+    COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
     # Database configuration
-    # Async database URL for SQLAlchemy async engine
-    DATABASE_URL: str = "sqlite+aiosqlite:///./invoices.db"
-    # Sync database URL for Alembic migrations
-    SYNC_DATABASE_URL: str = "sqlite:///./invoices.db"
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./invoices.db")
+    SYNC_DATABASE_URL: str = os.getenv("SYNC_DATABASE_URL", "sqlite:///./invoices.db")
 
     # Rate limiting
-    RATELIMIT_STORAGE_URL: str = "memory://"
+    RATELIMIT_STORAGE_URL: str = os.getenv("RATELIMIT_STORAGE_URL", "memory://")
 
     # Testing flag
-    TESTING: bool = False
+    TESTING: bool = os.getenv("TESTING", "false").lower() == "true"
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    if _HAS_PYDANTIC_SETTINGS and SettingsConfigDict is not None:
+        model_config = SettingsConfigDict(
+            env_file=".env",
+            env_file_encoding="utf-8",
+            extra="ignore",
+        )
+    else:
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
+            extra = "ignore"
 
-    def model_post_init(self, __context: Any) -> None:
+    def __init__(self, **values: Any):
+        super().__init__(**values)
+        self._sync_paths()
+
+    def _sync_paths(self) -> None:
         chat_db = os.getenv("CHAT_DB_PATH")
         if chat_db:
             if "sqlite+aiosqlite:///" in chat_db:
@@ -55,4 +73,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

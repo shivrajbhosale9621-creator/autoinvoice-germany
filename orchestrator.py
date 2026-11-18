@@ -1,41 +1,27 @@
 """
-orchestrator.py - Main Orchestrator Agent with Persistent Conversation Memory.
+orchestrator.py - Thin SQL Router & Copilot Orchestrator with Persistent Memory (Task 1).
 
-Architecture
-------------
-Two separate persistence layers:
-
-1. **Application chat history** (chat_store.py):
-   Raw messages and summaries stored in invoices.db. Used to:
-   - Display conversation history to the user.
-   - Build summarised context for the LLM on each request.
-
-2. **LangGraph graph state** (sqlite_checkpointer.py):
-   Internal agent state (tool calls, intermediate steps) stored in invoices.db
-   under a stable thread_id derived from the conversation_id. Used by the
-   ReAct agent to restore mid-execution state across restarts.
-
-Context injection strategy:
-   On each request, the orchestrator:
-   a) Runs summarisation if the threshold is reached.
-   b) Builds a context block: [summary (as system message)] + [recent verbatim messages].
-   c) Appends the new user message.
-   d) Invokes the LangGraph agent with this message list + the stable thread config.
-
-   The LangGraph checkpointer handles short-term within-graph state; the
-   chat_store + conversation_memory layer handles long-term cross-restart context.
+Architecture (German Build):
+----------------------------
+1. Replaces LangGraph and ChromaDB vector search with a thin SQL router:
+   - Classifies the user question (resolving follow-up context from conversation_memory).
+   - Calls the appropriate Python/SQL tool (`invoice_aggregate`, `query_invoices_sql`,
+     `get_validation_summary`, `extract_data_ocr`, `generate_excel`, `generate_graph`,
+     `propose_copilot_action`).
+   - Keeps `invoice_aggregate` as the ONLY place totals, sums, averages, and counts
+     are computed. The LLM never computes numbers.
+   - Formats answers with clickable invoice citations `[RE-2026-10418](#invoice/RE-2026-10418)`
+     and supports human-in-the-loop approval cards for DATEV booking / marking paid.
 """
 
-import logging
 import os
+import re
+import json
 import uuid
+import sqlite3
+import logging
 import datetime
-from typing import Optional
-
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.tools import tool
-from langchain_groq import ChatGroq
-from langgraph.prebuilt import create_react_agent
+from typing import Optional, Dict, Any, List
 
 from config import (
     GROQ_API_KEY,
@@ -52,8 +38,15 @@ from chat_store import (
     list_conversations,
 )
 from conversation_memory import maybe_summarise, build_context_block
-from sqlite_checkpointer import SqliteCheckpointer
-
+from vector_store import (
+    get_all_invoices,
+    search_invoices_fts,
+    normalize_invoice_data,
+    set_current_user_id,
+    format_eur_de,
+    format_date_de,
+    parse_numeric,
+)
 from qa_agent import QAAgent as _QAAgent
 from ocr_engine import OCRAgent as _OCRAgent
 from graph_agent import GraphAgent as _GraphAgent
@@ -61,214 +54,22 @@ from report_generator import ReportAgent as _ReportAgent
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Module-level singleton checkpointer (one per process, thread-safe)
-# ─────────────────────────────────────────────────────────────────────────────
-_checkpointer: Optional[SqliteCheckpointer] = None
+
+def _cite(inv_num: str) -> str:
+    clean = str(inv_num or "N/A").strip()
+    if not clean or clean == "N/A":
+        return clean
+    return f"[{clean}](#invoice/{clean})"
 
 
-def _get_checkpointer() -> SqliteCheckpointer:
-    global _checkpointer
-    if _checkpointer is None:
-        _checkpointer = SqliteCheckpointer(db_path=CHAT_DB_PATH)
-    return _checkpointer
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main Orchestrator
-# ─────────────────────────────────────────────────────────────────────────────
-
-_SYSTEM_PROMPT = """
-# Role: Main Orchestrator Agent
-
-You are the Main Orchestrator Agent for an AI-powered Invoice Automation System. Your responsibility is to understand user requests, select and coordinate specialist tools, manage relevant conversation context, and provide accurate, consistent results.
-
-## 1. Available Tools
-
-You have access to the following specialist tools:
-
-1. **answer_invoice_question**: Answers questions about previously processed invoices using stored invoice data and the vector database.
-2. **extract_data_ocr**: Processes invoice files, extracts invoice information using OCR, and stores the extracted data through the existing invoice-processing pipeline.
-3. **generate_excel**: Generates Excel reports based on user requirements, including date ranges, seller names, invoice totals, and other relevant filters.
-4. **generate_graph**: Generates charts and visualizations based on invoice data and the user's requested analysis.
-5. **invoice_aggregate**: Computes EXACT counts, sums, averages, breakdowns, and per-vendor line-item unit prices in Python over stored invoices. Mandatory for every totals/counts/averages/exclusions/recency/line-item-rate question (see section 6). Never do arithmetic yourself.
-
-Use each tool according to its purpose. Do not call every tool for every request.
-
-## 2. Understand and Route User Requests
-
-- Analyze the user's intent before selecting tools.
-- Use `extract_data_ocr` to process new invoice files.
-- Use `answer_invoice_question` to answer questions about existing invoice records and financial information.
-- Use `generate_excel` to generate Excel reports.
-- Use `generate_graph` to create charts, graphs, and visual analyses.
-- Preserve the user's requested metrics, filters, date ranges, and output formats.
-- If essential information is missing, ask a concise clarifying question rather than making assumptions.
-- Supply each tool with the correct arguments required by its interface.
-
-## 6. Exact Numbers: Always Use `invoice_aggregate`
-
-`invoice_aggregate` computes exact counts, sums, averages, and breakdowns in
-Python over the user's stored invoices. Use it for ANY question involving:
-totals ("total spend", "how much in total"), counts ("how many invoices",
-"how many unpaid"), averages, per-vendor or per-status sums, exclusions
-("excluding Sharma", "other than NexGen"), recency ("last uploaded",
-"most recent", "last 3 invoices"), and line-item rates ("at what rate is
-the Wireless Mouse sold by each vendor", "price per vendor for item X").
-
-- NEVER add up amounts yourself from the summary matrix or from retrieved
-  chunks, and NEVER estimate a total from a few retrieved invoices. Call
-  `invoice_aggregate` and quote its numbers verbatim.
-- For recency questions ("last uploaded", "most recent N"), pass
-  {"sort": "uploaded_at_desc", "limit": N}. `uploaded_at` is the ingestion
-  timestamp and is the ONLY correct ordering for "last uploaded". Do NOT
-  sort by invoice_date for recency questions.
-- For "last but one" / "second most recent", request limit 2 and take the
-  second entry.
-- For before-tax questions, use the tool's "subtotal" field. If subtotal is
-  0 or missing for an invoice, say "not extracted" - NEVER report
-  total_amount as the subtotal.
-- If the tool's "disambiguation" field says a vendor filter matched multiple
-  vendors, present each vendor's total separately and ask the user which one
-  they meant. NEVER merge them into one number silently.
-- For line-item rate/price questions, pass {"line_item": "<product name>"}
-  (optionally combined with "vendor" to narrow to one seller). The tool
-  returns per-vendor unit_prices computed in Python: quote each vendor's
-  prices verbatim, one vendor at a time, never merged. If the tool returns
-  no matching vendors, say the item was not found - never invent a rate,
-  and never ask the user to narrow down a question the tool already answered.
-- After getting the tool result, you may call `answer_invoice_question` for
-  surrounding context, but the numbers must come from `invoice_aggregate`.
-
-## 3. Parallel Tool Execution
-
-When a user request contains multiple independent tasks, request the relevant tool calls in the same agent step so they can execute concurrently whenever the model and execution framework support parallel tool calls.
-
-Examples:
-
-**Example A: Seller analysis and graph**
-
-User: "Find the top five sellers by total invoice amount and generate a graph showing them."
-
-- Use `answer_invoice_question` to retrieve the top five sellers and their total invoice amounts.
-- Use `generate_graph` to generate the requested visualization.
-- These tasks may execute concurrently because both agents can independently access the same database snapshot.
-
-**Example B: Data analysis and Excel report**
-
-User: "Tell me the total invoice amount for September and create an Excel report."
-
-- Use the relevant tools concurrently when both tasks have sufficient information to proceed independently.
-
-**Example C: Sequential processing**
-
-User: "Process this invoice and then tell me its total amount."
-
-- First use `extract_data_ocr` to process the invoice.
-- Then use `answer_invoice_question` to retrieve its stored details after the data becomes available.
-
-Rules for execution:
-
-- Execute independent tasks concurrently whenever possible.
-- Execute dependent tasks in the correct order.
-- Do not unnecessarily serialize independent operations.
-- Avoid redundant database queries when results can be reused.
-- Never claim that tasks executed concurrently unless the execution mechanism actually ran them concurrently.
-
-## 4. Shared Database and Data Consistency
-
-- Specialist agents can independently access the shared database and database snapshot.
-- Use consistent definitions, filters, date ranges, and aggregation rules across all tools.
-- For seller rankings, distinguish between total invoice amount, invoice count, average invoice value, and other possible metrics.
-- When a graph or Excel report represents previously requested results, preserve the same selection criteria and filters.
-- Reuse previous results when appropriate and available, rather than repeating unnecessary work.
-- If agents independently retrieve the same information, ensure their outputs remain consistent.
-- Never fabricate, alter, or assume invoice records, seller names, dates, amounts, or numerical results.
-
-## 5. Conversation History and Context Management
-
-The orchestrator may receive recent conversation history, a conversation summary, and structured context from previous tasks.
-
-Use this information to maintain continuity across user requests.
-
-### Interpreting follow-up requests
-
-Resolve references such as:
-
-- "Show me the top five sellers."
-- "Now generate a graph for them."
-- "Export those results to Excel."
-- "Use the same date range."
-- "Filter it to just one seller."
-
-Interpret follow-up requests using relevant earlier messages, decisions, and tool results.
-
-### Passing context to specialist agents
-
-1. Pass each specialist the relevant context required to complete its task accurately.
-2. Include previous questions, seller names, invoice references, date ranges, metrics, filters, chart preferences, and report requirements when applicable.
-3. When a task depends on an earlier result, preserve its meaning and constraints when invoking the next tool.
-4. Do not assume specialist agents automatically have access to the orchestrator's conversation history. Provide the necessary context through their tool arguments or another supported state mechanism.
-5. Keep the context concise and relevant. Do not forward unrelated historical messages unnecessarily.
-6. If an ambiguous reference cannot be resolved reliably, ask the user for clarification.
-
-### Context reliability
-
-- Treat conversation history and summaries as context, not as authoritative invoice records.
-- Use the appropriate tool to retrieve or verify invoice information when necessary.
-- Do not invent missing information based on a summary.
-- Preserve relevant user requirements across follow-up requests until the user changes them or the task is completed.
-
-## 6. Task Dependencies and Result Coordination
-
-- Identify which tasks can run independently and which depend on earlier results.
-- Pass the necessary input and context to dependent tasks only after their prerequisites are complete.
-- When multiple tools return results, combine them into a coherent response.
-- When the user requests both numerical results and a graph, ensure the visualization represents the requested metric and filters.
-- When the user requests an Excel report based on earlier analysis, preserve the applicable criteria and output requirements.
-- If a tool fails, explain the failure accurately and provide any successfully completed results.
-- Do not claim that a file was generated, data was stored, or a task was completed unless the tool result supports that claim.
-
-## 7. Final Response
-
-- Present results in clear, concise, user-friendly language.
-- Include relevant numerical values, currency, units, and filters when available.
-- When appropriate, summarize the analysis before presenting the visualization or report.
-- Provide file references or paths returned by tools when available.
-- Clearly communicate partial results, missing information, and errors.
-- Do not expose internal reasoning or unnecessary implementation details.
-
-## 8. General Behavior
-
-- Be accurate, professional, and concise.
-- Prioritize reliable results and efficient execution.
-- Avoid unnecessary tool calls.
-- Do not substitute assumptions or general knowledge for actual invoice data.
-- Do not claim successful execution without supporting tool results.
-## 9. Currency and Data Presentation Rules
-
-- These are Indian invoices. Always use the Indian Rupee symbol (₹) for monetary amounts, formatted with comma grouping (e.g., ₹1,250.00, ₹50,000.00). Never use dollar ($) signs.
-- When listing vendors or sellers, always output clean, human-readable vendor names. Never display raw Python dictionaries or JSON strings like `{'name': '...'}` or `[object Object]`.
-
-## Primary Objective
-
-Act as an intelligent coordinator between the user and the specialist agents. Understand the current request in the context of the conversation, route it to the correct tools, execute independent tasks concurrently whenever possible, respect task dependencies, and deliver accurate, consistent results.
-"""
-
-
-def _line_item_rates(entries, item_q):
-    """Aggregate matching line items by vendor, in Python.
-
-    entries: list of (vendor_name, line_items) tuples, already filtered.
-    item_q: substring matched case-insensitively against the item description.
-
-    Returns a dict with per-vendor distinct unit prices plus match stats.
-    Line-item dicts use varied key names across documents, so description is
-    read from name/description/desc/item/item_name/product and the unit price
-    from rate/unit_price/price/unit_rate.
+def _line_item_rates(entries: list, item_q: str) -> dict:
+    """
+    Aggregate matching line items by vendor in Python (Task 1 & Task 7).
+    Computes exact unit prices and normalized price per 1 unit (unit_price / price_unit),
+    and flags the cheapest vendor.
     """
     q = str(item_q or "").strip().lower()
-    vendors = {}
+    vendors: Dict[str, Any] = {}
     total_lines = 0
     invoices_with_match = 0
 
@@ -278,7 +79,7 @@ def _line_item_rates(entries, item_q):
         except (TypeError, ValueError):
             return None
 
-    for vendor, items in entries:
+    for vendor, inv_num, items in entries:
         if not isinstance(items, list):
             continue
         matched_here = 0
@@ -286,57 +87,270 @@ def _line_item_rates(entries, item_q):
             if not isinstance(it, dict):
                 continue
             desc = str(
-                it.get("name") or it.get("description") or it.get("desc")
+                it.get("description") or it.get("name") or it.get("desc")
                 or it.get("item") or it.get("item_name") or it.get("product") or ""
             )
-            if q not in desc.lower():
+            art = str(it.get("article_number") or "")
+            if q and (q not in desc.lower() and q not in art.lower()):
                 continue
-            price = it.get("rate")
+            price = it.get("unit_price")
             if price is None:
-                price = it.get("unit_price")
+                price = it.get("rate")
             if price is None:
                 price = it.get("price")
-            if price is None:
-                price = it.get("unit_rate")
             price = _fnum(price)
+            pe = _fnum(it.get("price_unit")) or 1.0
+            if pe <= 0:
+                pe = 1.0
+            effective_unit_price = round(price / pe, 4) if price is not None else None
             if price is not None:
-                price = round(price, 2)
-            qty = _fnum(it.get("qty") if it.get("qty") is not None else it.get("quantity"))
+                price = round(price, 4)
+
             v = vendor or "Unknown"
-            b = vendors.setdefault(v, {"unit_prices": [], "matching_lines": 0})
+            b = vendors.setdefault(v, {
+                "unit_prices": [],
+                "effective_unit_prices": [],
+                "matching_lines": 0,
+                "invoices": [],
+                "sample_description": desc or art,
+            })
             if price is not None and price not in b["unit_prices"]:
                 b["unit_prices"].append(price)
                 b["unit_prices"].sort()
+            if effective_unit_price is not None and effective_unit_price not in b["effective_unit_prices"]:
+                b["effective_unit_prices"].append(effective_unit_price)
+                b["effective_unit_prices"].sort()
+            if inv_num and inv_num not in b["invoices"]:
+                b["invoices"].append(inv_num)
             b["matching_lines"] += 1
             matched_here += 1
             total_lines += 1
         if matched_here:
             invoices_with_match += 1
+
+    # Flag cheapest vendor in Python
+    cheapest_vendor = None
+    cheapest_price = None
+    for v_name, v_data in vendors.items():
+        effs = v_data.get("effective_unit_prices") or v_data.get("unit_prices") or []
+        if effs:
+            min_p = min(effs)
+            v_data["min_unit_price"] = min_p
+            if cheapest_price is None or min_p < cheapest_price:
+                cheapest_price = min_p
+                cheapest_vendor = v_name
+
+    for v_name, v_data in vendors.items():
+        v_data["is_cheapest"] = (v_name == cheapest_vendor and cheapest_vendor is not None)
+
     return {
         "mode": "line_item",
         "line_item_query": str(item_q or "").strip(),
         "vendors": vendors,
+        "cheapest_vendor": cheapest_vendor,
+        "cheapest_unit_price": cheapest_price,
         "total_matching_lines": total_lines,
         "invoices_with_match": invoices_with_match,
     }
 
 
+def compute_invoice_aggregate(
+    filter_spec: Dict[str, Any],
+    user_id: str,
+) -> Dict[str, Any]:
+    """
+    Task 1: Exact Python/SQL aggregation over SQLite `invoices` table.
+    The ONLY place totals, sums, averages, counts, and line-item rates are computed.
+    """
+    def _num(x):
+        try:
+            return float(x or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    f = filter_spec if isinstance(filter_spec, dict) else {}
+    vendor_q = str(f.get("vendor") or "").strip().lower()
+    exclude_vendor_q = str(f.get("exclude_vendor") or "").strip().lower()
+    status_q = str(f.get("payment_status") or "").strip().lower()
+    doc_type_q = str(f.get("document_type") or "").strip().lower()
+    date_from = str(f.get("date_from") or "").strip()
+    date_to = str(f.get("date_to") or "").strip()
+    sort = str(f.get("sort") or "").strip()
+    item_q = str(f.get("line_item") or "").strip()
+    try:
+        limit = int(f.get("limit") or 0)
+    except (TypeError, ValueError):
+        limit = 0
+
+    recs = []
+    line_entries = []
+
+    all_invs = get_all_invoices(user_id=user_id)
+    for inv in all_invs:
+        vendor = str(inv.get("vendor_name") or "")
+        status = str(inv.get("payment_status") or "Unpaid")
+        inv_date = str(inv.get("invoice_date") or "")
+        doc_type = str(inv.get("document_type") or "invoice")
+        inv_num = str(inv.get("invoice_number") or "")
+
+        if vendor_q and vendor_q not in vendor.lower():
+            continue
+        if exclude_vendor_q and exclude_vendor_q in vendor.lower():
+            continue
+        if status_q:
+            if status_q in ("unpaid", "open", "offen", "pending"):
+                if status.lower() == "paid" or status.lower() == "bezahlt":
+                    continue
+            elif status_q in ("paid", "bezahlt"):
+                if status.lower() not in ("paid", "bezahlt"):
+                    continue
+            elif status_q != status.lower():
+                continue
+        if doc_type_q and doc_type_q != doc_type.lower():
+            continue
+        if date_from and inv_date < date_from:
+            continue
+        if date_to and inv_date > date_to:
+            continue
+
+        if item_q:
+            line_entries.append((vendor, inv_num, inv.get("line_items") or []))
+            continue
+
+        recs.append({
+            "id": inv.get("id"),
+            "doc_id": inv.get("doc_id"),
+            "invoice_number": inv_num,
+            "citation": _cite(inv_num),
+            "vendor_name": vendor,
+            "buyer_name": str(inv.get("buyer_name") or ""),
+            "vat_id": str(inv.get("vat_id") or ""),
+            "document_type": doc_type,
+            "invoice_date": inv_date,
+            "due_date": str(inv.get("due_date") or ""),
+            "total_amount": _num(inv.get("total_amount")),
+            "subtotal": _num(inv.get("subtotal")),
+            "tax": _num(inv.get("tax_amount")),
+            "tax_amount": _num(inv.get("tax_amount")),
+            "discount": _num(inv.get("discount")),
+            "skonto_amount": _num(inv.get("skonto_amount")),
+            "skonto_deadline": str(inv.get("skonto_deadline") or ""),
+            "currency": str(inv.get("currency") or "EUR"),
+            "payment_status": status,
+            "validation_status": str(inv.get("validation_status") or "PENDING"),
+            "uploaded_at": str(inv.get("uploaded_at") or ""),
+        })
+
+    if item_q:
+        return _line_item_rates(line_entries, item_q)
+
+    if sort == "uploaded_at_desc":
+        recs.sort(key=lambda r: str(r.get("uploaded_at") or "").strip(), reverse=True)
+    elif sort == "invoice_date_desc":
+        recs.sort(key=lambda r: str(r.get("invoice_date") or "").strip(), reverse=True)
+    elif sort == "amount_desc":
+        recs.sort(key=lambda r: r.get("total_amount", 0.0), reverse=True)
+
+    total = round(sum(r["total_amount"] for r in recs), 2)
+    subtotal = round(sum(r["subtotal"] for r in recs), 2)
+    tax = round(sum(r["tax_amount"] for r in recs), 2)
+    discount = round(sum(r["discount"] for r in recs), 2)
+    skonto_total = round(sum(r["skonto_amount"] for r in recs if r["payment_status"].lower() not in ("paid", "bezahlt")), 2)
+    count = len(recs)
+
+    by_vendor: Dict[str, Any] = {}
+    for r in recs:
+        v = r["vendor_name"] or "Unknown"
+        b = by_vendor.setdefault(v, {"count": 0, "total_amount": 0.0, "subtotal": 0.0, "tax_amount": 0.0, "invoices": []})
+        b["count"] += 1
+        b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
+        b["subtotal"] = round(b["subtotal"] + r["subtotal"], 2)
+        b["tax_amount"] = round(b["tax_amount"] + r["tax_amount"], 2)
+        b["invoices"].append(r["invoice_number"])
+
+    by_status: Dict[str, Any] = {}
+    for r in recs:
+        s = r["payment_status"] or "Unknown"
+        b = by_status.setdefault(s, {"count": 0, "total_amount": 0.0, "invoices": []})
+        b["count"] += 1
+        b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
+        b["invoices"].append(r["invoice_number"])
+
+    result: Dict[str, Any] = {
+        "count": count,
+        "total_amount": total,
+        "subtotal": subtotal,
+        "tax": tax,
+        "tax_amount": tax,
+        "discount": discount,
+        "skonto_potential": skonto_total,
+        "average_total": round(total / count, 2) if count else 0.0,
+        "currency": "EUR",
+        "by_vendor": by_vendor,
+        "by_status": by_status,
+        "invoices": recs[:limit] if limit > 0 else recs,
+    }
+    if vendor_q and len(by_vendor) > 1:
+        result["disambiguation"] = (
+            f"vendor filter '{vendor_q}' matched {len(by_vendor)} vendors: "
+            + ", ".join(sorted(by_vendor))
+            + ". Present each vendor's total separately and ask the user which one "
+            "they meant. Do NOT report the merged total as the answer."
+        )
+    return result
+
+
+def create_copilot_action_proposal(
+    user_id: str,
+    conversation_id: str,
+    action_type: str,
+    target_invoices: List[str],
+    description: str,
+    db_path: str = CHAT_DB_PATH,
+) -> Dict[str, Any]:
+    """
+    Tier 2: Approval step.
+    Store a proposed action (post_datev or mark_paid) in SQLite awaiting human confirmation.
+    """
+    init_db(db_path)
+    action_id = f"act_{uuid.uuid4().hex[:10]}"
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        conn.execute(
+            """
+            INSERT INTO copilot_actions (
+                action_id, user_id, conversation_id, action_type,
+                target_invoices_json, description, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (
+                action_id,
+                str(user_id),
+                str(conversation_id),
+                action_type,
+                json.dumps(target_invoices),
+                description,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "action_id": action_id,
+        "action_type": action_type,
+        "target_invoices": target_invoices,
+        "description": description,
+        "status": "pending",
+    }
+
+
 class MainOrchestrator:
     """
-    Main Orchestrator with persistent conversation memory and LangGraph checkpointing.
-
-    Parameters
-    ----------
-    user_id : str
-        Identifier for the user.  Used to enforce conversation isolation in chat_store.
-    conversation_id : str, optional
-        Stable conversation identifier.  A new UUID is generated if not provided.
-    db_path : str, optional
-        Path to the SQLite database.  Defaults to CHAT_DB_PATH from config.
-    summarise_threshold : int, optional
-        Number of messages before summarisation triggers.
-    recent_window : int, optional
-        Number of recent messages kept verbatim after summarisation.
+    Thin SQL Router Orchestrator with persistent conversation memory.
+    Replaces LangGraph + ChromaDB with direct SQL/FTS5 routing and Python math.
     """
 
     def __init__(
@@ -347,289 +361,304 @@ class MainOrchestrator:
         summarise_threshold: int = SUMMARISE_THRESHOLD,
         recent_window: int = RECENT_WINDOW,
     ):
-        self.user_id = user_id
+        self.user_id = str(user_id)
         self.db_path = db_path or CHAT_DB_PATH
         self.summarise_threshold = summarise_threshold
         self.recent_window = recent_window
 
-        # Initialise DB schema
         init_db(self.db_path)
 
-        # Get or create conversation
-        import uuid
         self.conversation_id = get_or_create_conversation(
             conversation_id=conversation_id or str(uuid.uuid4()),
             user_id=self.user_id,
             db_path=self.db_path,
         )
-
-        # thread_id for LangGraph checkpointer = conversation_id (stable, unique per conversation)
         self.thread_id = self.conversation_id
 
-        # Build the LLM with capped max_tokens to prevent 8,000 token TPM exhaustion
-        self._llm = ChatGroq(
-            model=GROQ_MODEL_NAME,
-            api_key=GROQ_API_KEY,
-            temperature=0,
-            max_tokens=1000,
-        )
-
-        # Build specialist agents (scoped to this orchestrator's user)
         self._qa_agent = _QAAgent(user_id=self.user_id)
         self._ocr_agent = _OCRAgent()
-        self._graph_agent = _GraphAgent(llm=self._llm)
+        self._graph_agent = _GraphAgent()
         self._graph_agent.user_id = self.user_id
         self._report_agent = _ReportAgent(user_id=self.user_id)
 
-        # Build tools
-        self._tools = self._create_tools()
+    def invoice_aggregate(self, filter_json: str) -> str:
+        """Public tool method for exact Python/SQL aggregation."""
+        try:
+            f = json.loads(filter_json) if isinstance(filter_json, str) else dict(filter_json or {})
+        except Exception:
+            return json.dumps({"error": "filter_json must be valid JSON"})
+        return json.dumps(compute_invoice_aggregate(f, user_id=self.user_id), ensure_ascii=False)
 
-        # Build ReAct agent with SQLite checkpointer
-        self._agent = create_react_agent(
-            model=self._llm,
-            tools=self._tools,
-            prompt=_SYSTEM_PROMPT,
-            checkpointer=_get_checkpointer(),
+    # ─────────────────────────── Thin Router ─────────────────────────
+
+    def _classify_intent(self, user_query: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Thin router: classify the user query into one of:
+          - extract_ocr (file attached)
+          - propose_action (book to DATEV / mark paid -> requires human approval)
+          - excel_report (generate Excel export)
+          - graph (generate chart / plot)
+          - validation (validation report / errors / checks V1-V9)
+          - line_item_price (price comparison for a specific item)
+          - aggregate (totals, sums, averages, counts, recency, vendor/status breakdowns)
+          - sql_search (specific invoice details, fuzzy FTS5 search, Skonto, due dates)
+        Uses conversation memory for follow-up context.
+        """
+        q = user_query.strip()
+        q_low = q.lower()
+
+        # 1. File attachment check
+        m_file = re.search(r"\[Attached file saved at:\s*([^\]]+)\]", q)
+        if m_file:
+            file_path = m_file.group(1).strip()
+            store_flag = not any(w in q_low for w in ["do not store", "don't store", "nicht speichern", "nur prüfen"])
+            return {"route": "extract_ocr", "file_path": file_path, "store": store_flag}
+
+        # Extract any invoice number mentioned in current query or recent history
+        all_invs = get_all_invoices(user_id=self.user_id)
+        known_inv_nums = [str(inv.get("invoice_number") or "") for inv in all_invs if inv.get("invoice_number")]
+        mentioned_invs = [
+            num for num in known_inv_nums
+            if num.lower() in q_low
+        ]
+        # Follow-up resolution from recent messages if pronoun used ("diese", "it", "that invoice", "dafür")
+        if not mentioned_invs and any(w in q_low for w in ["diese", "dieser", "diesen", "dafür", "this invoice", "that invoice", "those", "it", "sie"]):
+            for msg in reversed(context.get("recent_messages") or []):
+                c_text = str(msg.get("content") or "").lower()
+                found_prev = [num for num in known_inv_nums if num.lower() in c_text]
+                if found_prev:
+                    mentioned_invs = found_prev
+                    break
+
+        # 2. Tier 2 Approval Step: Propose action (DATEV booking or Mark Paid)
+        if any(w in q_low for w in [
+            "mark paid", "mark as paid", "als bezahlt", "bezahlt markieren",
+            "post to datev", "an datev", "datev buchen", "in datev", "verbuchen"
+        ]):
+            act_type = "post_datev" if "datev" in q_low or "verbuchen" in q_low else "mark_paid"
+            targets = mentioned_invs or [inv["invoice_number"] for inv in all_invs if inv.get("payment_status", "").lower() != "paid"]
+            return {"route": "propose_action", "action_type": act_type, "target_invoices": targets}
+
+        # 3. Excel report
+        if any(w in q_low for w in ["excel", ".xlsx", "spreadsheet", "export unpaid", "tabelle exportieren", "excel-bericht"]):
+            return {"route": "excel_report", "query": q}
+
+        # 4. Graph / Visualization
+        if any(w in q_low for w in ["chart", "graph", "plot", "visual audit", "diagramm", "grafik", "visualisierung"]):
+            return {"route": "graph", "query": q}
+
+        # 5. Validation report / checks
+        if any(w in q_low for w in [
+            "validat", "prüf", "pruef", "fehler", "error", "check", "v1", "v2", "v3", "v4",
+            "v5", "v6", "v7", "v8", "v9", "leitweg", "ustg", "warum fail", "abweichung"
+        ]):
+            return {"route": "validation", "target_invoices": mentioned_invs}
+
+        # 6. Line-item price comparison
+        m_item = re.search(
+            r"(?:preis|rate|price|kosten|cost|vergleich|compare).*?(?:für|for|von|of)\s+([A-Za-z0-9ÄÖÜäöüß\-]{3,40})",
+            q,
+            flags=re.IGNORECASE,
         )
+        if m_item or any(w in q_low for w in ["preisvergleich", "price comparison", "unit price", "einzelpreis", "welcher lieferant ist am günstigsten"]):
+            item_term = m_item.group(1).strip(" ?.!,'\"") if m_item else ""
+            # Also check if any known article number or product word is in the query
+            if not item_term:
+                for inv in all_invs:
+                    for it in inv.get("line_items") or []:
+                        art = str(it.get("article_number") or "")
+                        desc_words = [w for w in re.findall(r"[\wÄÖÜäöüß-]{4,}", str(it.get("description") or ""))]
+                        if art and art.lower() in q_low:
+                            item_term = art
+                            break
+                        for dw in desc_words:
+                            if dw.lower() in q_low and dw.lower() not in ("preis", "stück", "rechnung"):
+                                item_term = dw
+                                break
+                        if item_term:
+                            break
+                    if item_term:
+                        break
+            return {"route": "aggregate", "filter": {"line_item": item_term or q}}
 
-    # ─────────────────────────── Tools ───────────────────────────────
+        # 7. Recency / Aggregate / Totals / Counts / Averages
+        if any(w in q_low for w in [
+            "last uploaded", "most recent", "zuletzt hochgeladen", "neueste", "letzte rechnung"
+        ]):
+            return {"route": "aggregate", "filter": {"sort": "uploaded_at_desc", "limit": 5}}
 
-    def _create_tools(self) -> list:
-        qa = self._qa_agent
-        ocr = self._ocr_agent
-        graph = self._graph_agent
-        report = self._report_agent
+        if any(w in q_low for w in [
+            "how many", "wie viele", "count", "anzahl", "total", "summe", "gesamt",
+            "spend", "umsatz", "ausgaben", "average", "durchschnitt", "top", "rank",
+            "unpaid", "offen", "paid", "bezahlt", "skonto", "cashflow", "fällig", "due"
+        ]) and not mentioned_invs:
+            flt: Dict[str, Any] = {}
+            if "unpaid" in q_low or "offen" in q_low:
+                flt["payment_status"] = "unpaid"
+            elif "paid" in q_low or "bezahlt" in q_low:
+                flt["payment_status"] = "paid"
+            return {"route": "aggregate", "filter": flt}
 
-        @tool
-        def answer_invoice_question(question: str) -> str:
-            """Answer questions about stored invoices using the vector database and invoice records."""
-            result = qa.answer(question)
-            return str(result.get("answer", result))
+        # 8. Specific invoice or FTS5 search
+        return {"route": "sql_search", "query": q, "target_invoices": mentioned_invs}
 
-        @tool
-        def extract_data_ocr(file: str, store: bool = True) -> str:
-            """
-            Extract invoice data from a PDF or image file.
-            Use store=True to extract AND index the invoice into the database (when user wants to add it).
-            Use store=False to extract ONLY without storing (when checking for duplicates or answering a one-time question about the file).
-            Always returns the full extracted invoice data so you can use it for further reasoning.
-            """
-            if store:
-                result = ocr.process_and_index_invoice(file, user_id=self.user_id)
-            else:
-                result = ocr.extract_only(file)
+    def _format_validation_summary(self, target_invoices: List[str]) -> str:
+        all_invs = get_all_invoices(user_id=self.user_id)
+        if not all_invs:
+            return "Es sind aktuell keine Rechnungen zur Prüfung vorhanden."
 
-            status = result.get("status", "failed")
-            message = result.get("message", "")
-            extracted = result.get("extracted_data", {})
+        invs = [
+            inv for inv in all_invs
+            if not target_invoices or inv.get("invoice_number") in target_invoices
+        ]
+        if not invs:
+            invs = all_invs
 
-            if status != "success" or not extracted:
-                return f"[{status}] {message}"
+        lines = ["### Prüfbericht-Zusammenfassung (9-Stufen-Validierung in Python)\n"]
+        for inv in invs:
+            inv_num = inv.get("invoice_number", "N/A")
+            cite = _cite(inv_num)
+            vr = inv.get("validation_report") or {}
+            overall = vr.get("overall_status") or inv.get("validation_status") or "PENDING"
+            xrechnung_ready = vr.get("xrechnung_ready", False)
+            checks = vr.get("checks") or []
+            failed_checks = [c for c in checks if c.get("status") == "FAIL"]
+            unverified_checks = [c for c in checks if c.get("status") == "CANNOT VERIFY"]
 
-            # Format extracted data as readable string for LLM context
-            lines = [f"[{status}] {message}", "\nExtracted Invoice Data:"]
-            for key, val in extracted.items():
-                if val is not None and val != "" and val != [] and val != {}:
-                    lines.append(f"  {key}: {val}")
-            if not store:
-                lines.append("\nNote: This invoice was NOT stored in the database.")
+            lines.append(
+                f"- **{cite}** ({inv.get('vendor_name')}, Brutto: {format_eur_de(inv.get('total_amount'))}): "
+                f"Status **{overall}** | XRechnung-fähig: **{'JA' if xrechnung_ready else 'NEIN'}**"
+            )
+            for fc in failed_checks:
+                lines.append(f"  - **[FAIL] {fc.get('code')} ({fc.get('name')})**: {fc.get('message')}")
+                for d in fc.get("discrepancies") or []:
+                    lines.append(
+                        f"    - Position {d.get('line', '-')}: Erwartet `{format_number_de_val(d.get('expected'))}`, "
+                        f"Gedruckt `{format_number_de_val(d.get('printed'))}`, "
+                        f"Differenz `{format_number_de_val(d.get('difference'))}`"
+                    )
+            for uc in unverified_checks:
+                lines.append(f"  - **[CANNOT VERIFY] {uc.get('code')} ({uc.get('name')})**: {uc.get('message')}")
+            if not failed_checks and not unverified_checks:
+                lines.append("  - Alle 9 Prüfungen (V1 bis V9) erfolgreich bestanden (PASS).")
+
+        return "\n".join(lines)
+
+    def _phrase_aggregate_answer(self, user_query: str, agg_data: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """
+        Phrase the answer from exact `invoice_aggregate` output.
+        Never computes numbers in the LLM; every number comes from `agg_data` and carries a citation.
+        """
+        if agg_data.get("mode") == "line_item":
+            q_item = agg_data.get("line_item_query") or "Artikel"
+            vendors = agg_data.get("vendors") or {}
+            if not vendors:
+                return f"Für den Suchbegriff `{q_item}` wurden keine passenden Rechnungspositionen in SQLite gefunden."
+            lines = [f"### Preisvergleich für `{q_item}` (aus SQLite berechnet)\n"]
+            for v_name, v_info in vendors.items():
+                prices_str = ", ".join(format_eur_de(p) for p in (v_info.get("unit_prices") or []))
+                eff_str = ", ".join(f"{format_eur_de(p)} / Einh." for p in (v_info.get("effective_unit_prices") or []))
+                invs_cites = ", ".join(_cite(i) for i in (v_info.get("invoices") or []))
+                cheap_badge = " **[GÜNSTIGSTER ANBIETER / CHEAPEST]**" if v_info.get("is_cheapest") else ""
+                lines.append(
+                    f"- **{v_name}**{cheap_badge}: Einzelpreis {prices_str} "
+                    f"(Effektivpreis je Einheit: {eff_str}) | Positionen: {v_info.get('matching_lines')} | "
+                    f"Belege: {invs_cites}"
+                )
             return "\n".join(lines)
 
-        @tool
-        def generate_excel(query: str) -> str:
-            """Generate an Excel report of invoices matching a description (date range, vendor, status, etc.). Saves the report and returns the download filename."""
-            import datetime as _dt
-            import uuid as _uuid
-            _timestamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            _uid = str(_uuid.uuid4())[:8]
-            _filename = f"invoice_report_{_timestamp}_{_uid}.xlsx"
-            _reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
-            os.makedirs(_reports_dir, exist_ok=True)
-            _output_path = os.path.join(_reports_dir, _filename)
-            result = report.generate_report(query, output_path=_output_path)
-            _status = result.get("status", "failed")
-            _msg = result.get("message", "")
-            if _status == "success":
-                return f"{_msg} Download filename: {_filename}"
-            return f"[{_status}] {_msg}"
+        count = agg_data.get("count", 0)
+        if count == 0:
+            return "Es wurden keine Rechnungen gefunden, die den Filterkriterien entsprechen (Anzahl: 0, Summe: 0,00 €)."
 
-        @tool
-        def generate_graph(query: str) -> str:
-            """Generate a chart or visualization of invoice data based on a natural language prompt."""
-            result = graph.run(query)
-            status = result.get("status", "unknown")
-            msg = result.get("message", "")
-            chart_paths = result.get("chart_paths", [])
-            chart_tags = ""
-            if chart_paths:
-                for cp in chart_paths:
-                    chart_tags += f"\n[CHART: {cp}]"
-            return f"[{status}] {msg}{chart_tags}"
+        tot_de = format_eur_de(agg_data.get("total_amount", 0.0))
+        sub_de = format_eur_de(agg_data.get("subtotal", 0.0))
+        tax_de = format_eur_de(agg_data.get("tax_amount", 0.0))
+        avg_de = format_eur_de(agg_data.get("average_total", 0.0))
+        skonto_de = format_eur_de(agg_data.get("skonto_potential", 0.0))
 
-        @tool
-        def invoice_aggregate(filter_json: str) -> str:
-            """Compute EXACT invoice statistics in Python over the user's stored invoices.
+        lines = [
+            f"### Exakte Auswertung aus SQLite (`invoice_aggregate`)\n",
+            f"- **Anzahl Belege**: {count}",
+            f"- **Gesamtbetrag (Brutto)**: **{tot_de}**",
+            f"- **Nettobetrag (Subtotal)**: {sub_de}",
+            f"- **Umsatzsteuer (USt gesamt)**: {tax_de}",
+            f"- **Durchschnittlicher Belegwert**: {avg_de}",
+        ]
+        if agg_data.get("skonto_potential", 0.0) > 0:
+            lines.append(f"- **Verfügbares Skonto-Potenzial**: {skonto_de}")
 
-            Use this for ANY question about totals, counts, averages, sums,
-            per-vendor or per-status breakdowns, exclusions, recency, or the
-            rate/price of a specific line item (product) per vendor.
-            NEVER add up amounts yourself; ALWAYS call this tool and quote
-            its numbers verbatim.
+        if agg_data.get("disambiguation"):
+            lines.append(f"\nHinweis: {agg_data['disambiguation']}")
 
-            filter_json: JSON object, all keys optional:
-              - "vendor": substring matched case-insensitively against vendor_name
-              - "payment_status": e.g. "Paid", "Unpaid", "Pending", "Overdue"
-              - "date_from", "date_to": "YYYY-MM-DD" bounds on invoice_date (inclusive)
-              - "sort": "uploaded_at_desc" to list most recently uploaded first
-              - "limit": max invoices to list (use with sort)
-              - "line_item": substring matched case-insensitively against line-item
-                descriptions, e.g. "Wireless Mouse". When set, the tool switches
-                to line-item mode and returns per-vendor unit prices for the
-                matching items instead of invoice-level totals. Combine with
-                "vendor" to narrow to one seller.
-
-            Returns JSON with count, total_amount, subtotal, tax, discount,
-            average_total, by_vendor and by_status breakdowns, and (when a
-            limit is set) the matching invoice list. In line-item mode returns
-            mode="line_item" with per-vendor unit_prices and match stats.
-            """
-            import json as _json
-            try:
-                f = _json.loads(filter_json) if isinstance(filter_json, str) else dict(filter_json or {})
-            except Exception:
-                return _json.dumps({"error": "filter_json must be valid JSON"})
-            if not isinstance(f, dict):
-                return _json.dumps({"error": "filter_json must be a JSON object"})
-
-            from vector_store import get_all_invoices, normalize_invoice_data
-
-            def _num(x):
-                try:
-                    return float(x or 0.0)
-                except (TypeError, ValueError):
-                    return 0.0
-
-            vendor_q = str(f.get("vendor") or "").strip().lower()
-            status_q = str(f.get("payment_status") or "").strip().lower()
-            date_from = str(f.get("date_from") or "").strip()
-            date_to = str(f.get("date_to") or "").strip()
-            sort = str(f.get("sort") or "").strip()
-            item_q = str(f.get("line_item") or "").strip()
-            try:
-                limit = int(f.get("limit") or 0)
-            except (TypeError, ValueError):
-                limit = 0
-
-            recs = []
-            line_entries = []  # (vendor_name, line_items) for line-item mode
-            for inv in get_all_invoices(user_id=self.user_id):
-                norm = normalize_invoice_data(inv, file_name=inv.get("file_name", ""))
-                vendor = str(norm.get("vendor_name") or "")
-                status = str(norm.get("payment_status") or "")
-                inv_date = str(norm.get("invoice_date") or "")
-                if vendor_q and vendor_q not in vendor.lower():
-                    continue
-                if status_q and status_q != status.lower():
-                    continue
-                if date_from and inv_date < date_from:
-                    continue
-                if date_to and inv_date > date_to:
-                    continue
-                if item_q:
-                    line_entries.append((vendor, norm.get("line_items") or []))
-                    continue
-                recs.append({
-                    "invoice_number": str(norm.get("invoice_number") or ""),
-                    "vendor_name": vendor,
-                    "invoice_date": inv_date,
-                    "total_amount": _num(norm.get("total_amount")),
-                    "subtotal": _num(norm.get("subtotal")),
-                    "tax": _num(norm.get("tax")),
-                    "discount": _num(norm.get("discount")),
-                    "payment_status": status,
-                    "uploaded_at": str(inv.get("uploaded_at") or ""),
-                })
-
-            if item_q:
-                # Line-item mode: per-vendor unit prices for the matching
-                # product, computed in Python. Never merge vendors.
-                return _json.dumps(_line_item_rates(line_entries, item_q))
-
-            if sort == "uploaded_at_desc":
-                # Newest first. Records without a timestamp ("") sort last
-                # because "" compares smaller than any real timestamp string.
-                recs.sort(key=lambda r: str(r.get("uploaded_at") or "").strip(), reverse=True)
-
-            total = round(sum(r["total_amount"] for r in recs), 2)
-            subtotal = round(sum(r["subtotal"] for r in recs), 2)
-            tax = round(sum(r["tax"] for r in recs), 2)
-            discount = round(sum(r["discount"] for r in recs), 2)
-            count = len(recs)
-
-            by_vendor = {}
-            for r in recs:
-                v = r["vendor_name"] or "Unknown"
-                b = by_vendor.setdefault(v, {"count": 0, "total_amount": 0.0})
-                b["count"] += 1
-                b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
-
-            by_status = {}
-            for r in recs:
-                s = r["payment_status"] or "Unknown"
-                b = by_status.setdefault(s, {"count": 0, "total_amount": 0.0})
-                b["count"] += 1
-                b["total_amount"] = round(b["total_amount"] + r["total_amount"], 2)
-
-            result = {
-                "count": count,
-                "total_amount": total,
-                "subtotal": subtotal,
-                "tax": tax,
-                "discount": discount,
-                "average_total": round(total / count, 2) if count else 0.0,
-                "by_vendor": by_vendor,
-                "by_status": by_status,
-            }
-            if limit > 0:
-                result["invoices"] = recs[:limit]
-            if vendor_q and len(by_vendor) > 1:
-                result["disambiguation"] = (
-                    f"vendor filter '{vendor_q}' matched {len(by_vendor)} vendors: "
-                    + ", ".join(sorted(by_vendor))
-                    + ". Present each vendor's total separately and ask the user which one "
-                    "they meant. Do NOT report the merged total as the answer."
+        by_vendor = agg_data.get("by_vendor") or {}
+        if by_vendor:
+            lines.append("\n**Aufschlüsselung nach Lieferant:**")
+            for v_name, v_stat in sorted(by_vendor.items(), key=lambda x: x[1]["total_amount"], reverse=True):
+                cites = ", ".join(_cite(i) for i in v_stat.get("invoices", []))
+                lines.append(
+                    f"- **{v_name}**: {v_stat['count']} Beleg(e), Brutto **{format_eur_de(v_stat['total_amount'])}** "
+                    f"(Netto {format_eur_de(v_stat['subtotal'])}, USt {format_eur_de(v_stat['tax_amount'])}) "
+                    f"| Quellen: {cites}"
                 )
-            return _json.dumps(result)
 
-        return [answer_invoice_question, extract_data_ocr, generate_excel, generate_graph, invoice_aggregate]
+        invs = agg_data.get("invoices") or []
+        if invs:
+            lines.append("\n**Einzelbelege (Quellen):**")
+            for r in invs[:10]:
+                dt_de = format_date_de(r.get("invoice_date")) or r.get("invoice_date", "N/A")
+                due_de = format_date_de(r.get("due_date")) or r.get("due_date", "N/A")
+                lines.append(
+                    f"- **{_cite(r['invoice_number'])}** | {r['vendor_name']} | Datum: {dt_de} | "
+                    f"Fällig: {due_de} | Netto: {format_eur_de(r['subtotal'])} | "
+                    f"USt: {format_eur_de(r['tax_amount'])} | Brutto: **{format_eur_de(r['total_amount'])}** | "
+                    f"Status: {r['payment_status']}"
+                )
 
-    # ─────────────────────────── Public API ──────────────────────────
+        # If Groq is available, allow optional natural-language lead-in while preserving exact figures & citations
+        if GROQ_API_KEY:
+            try:
+                from langchain_groq import ChatGroq
+                from langchain_core.prompts import ChatPromptTemplate
+
+                llm = ChatGroq(model=GROQ_MODEL_NAME, api_key=GROQ_API_KEY, temperature=0, max_tokens=600)
+                prompt = ChatPromptTemplate.from_template(
+                    """You are a German accounting copilot.
+Write a short, direct 2-sentence answer to the user's question using ONLY the exact pre-computed figures below.
+Never compute any math yourself, never change any numbers, and never use em dashes.
+Always include clickable invoice links like [RE-2026-10418](#invoice/RE-2026-10418).
+
+User Question: "{query}"
+Pre-computed Tool Result:
+{tool_text}
+
+Concise Lead-in:"""
+                )
+                resp = (prompt | llm).invoke({"query": user_query, "tool_text": "\n".join(lines)})
+                lead = getattr(resp, "content", "").strip().replace("-", "-")
+                if lead:
+                    return f"{lead}\n\n" + "\n".join(lines)
+            except Exception:
+                pass
+
+        return "\n".join(lines)
 
     def run(self, user_query: str, idempotency_key: Optional[str] = None) -> str:
         """
-        Process a user message and return the assistant's response.
-
-        Steps:
-        1. Persist the user message to chat_store.
-        2. Trigger summarisation if the threshold is reached.
-        3. Build context block (summary + recent messages).
-        4. Invoke the LangGraph ReAct agent with the context + current message.
-        5. Persist the assistant response to chat_store.
-        6. Return the final response text.
-
-        Parameters
-        ----------
-        user_query : str
-            The user's current message.
-        idempotency_key : str, optional
-            Caller-supplied deduplication token for the user message.
-            If the same key is sent again (retry), the message is not saved twice.
+        Process a user message through the thin SQL router and return the assistant response.
         """
-        # Scope every invoice-data read in this request to the owner
-        from vector_store import set_current_user_id as _set_uid
-        _set_uid(self.user_id)
+        set_current_user_id(self.user_id)
 
-        # 1. Save user message (with deduplication)
+        # Check idempotency: if message with same idempotency_key already exists, return the cached assistant reply
+        if idempotency_key:
+            existing_msgs = get_messages(self.conversation_id, self.user_id, db_path=self.db_path)
+            for idx, m in enumerate(existing_msgs):
+                if m.get("idempotency_key") == idempotency_key:
+                    for follow in existing_msgs[idx + 1:]:
+                        if follow.get("role") == "assistant":
+                            return follow.get("content", "")
+
+        # 1. Save user message
         save_message(
             conversation_id=self.conversation_id,
             role="user",
@@ -649,89 +678,120 @@ class MainOrchestrator:
         except Exception as exc:
             logger.warning("Summarisation step failed (non-fatal): %s", exc)
 
-        # 3. Build context
+        # 3. Build conversation context for follow-up questions
         context = build_context_block(
             conversation_id=self.conversation_id,
             recent_window=self.recent_window,
             db_path=self.db_path,
         )
 
-        # 4. Assemble messages list for the agent
-        #    = [summary_system_msg (if any)] + [recent verbatim messages] + [current user msg]
-        lc_messages = context["lc_messages"].copy()
-        if not lc_messages or not (
-            isinstance(lc_messages[-1], HumanMessage)
-            and lc_messages[-1].content == user_query
-        ):
-            lc_messages.append(HumanMessage(content=user_query))
-
-        # 5. Invoke the agent with a stable thread config
-        thread_config = {
-            "configurable": {
-                "thread_id": self.thread_id,
-            }
-        }
-
-        # Check if the checkpointer already has conversation history for this thread
-        cp = _get_checkpointer()
-        existing_cp = cp.get_tuple(thread_config)
-        has_existing = bool(
-            existing_cp
-            and existing_cp.checkpoint.get("channel_values", {}).get("messages")
-        )
-
-        agent_input = (
-            {"messages": [HumanMessage(content=user_query)]}
-            if has_existing
-            else {"messages": lc_messages}
-        )
+        # 4. Route and execute tool
+        intent = self._classify_intent(user_query, context)
+        route = intent.get("route", "sql_search")
 
         try:
-            response = self._agent.invoke(
-                agent_input,
-                config=thread_config,
-            )
-            final_response = response["messages"][-1].content
-        except Exception as exc:
-            logger.warning("Agent invocation failed for thread %s: %s. Initiating self-healing recovery...", self.thread_id, exc)
-            if "429" in str(exc) or "rate limit" in str(exc).lower():
-                import time
-                time.sleep(8)
-            # Self-healing recovery: clear internal thread checkpoints in SQLite and re-invoke with context block
-            try:
-                conn = cp._conn()
-                conn.execute("DELETE FROM lg_checkpoints WHERE thread_id=?", (self.thread_id,))
-                conn.execute("DELETE FROM lg_writes WHERE thread_id=?", (self.thread_id,))
-                conn.execute("DELETE FROM lg_blobs WHERE thread_id=?", (self.thread_id,))
-                conn.commit()
-                response = self._agent.invoke(
-                    {"messages": lc_messages},
-                    config=thread_config,
+            if route == "extract_ocr":
+                file_path = intent["file_path"]
+                store = intent.get("store", True)
+                res = (
+                    self._ocr_agent.process_and_index_invoice(file_path, user_id=self.user_id)
+                    if store
+                    else self._ocr_agent.extract_only(file_path)
                 )
-                final_response = response["messages"][-1].content
-                logger.info("Self-healing recovery succeeded for thread %s", self.thread_id)
-            except Exception as retry_exc:
-                logger.error("Self-healing recovery failed for conversation %s: %s", self.conversation_id, retry_exc)
-                err_text = str(exc).lower() + " " + str(retry_exc).lower()
-                if "429" in err_text or "rate limit" in err_text or "tokens" in err_text:
-                    final_response = "The AI service is busy, please wait a few seconds and try again."
-                else:
-                    final_response = "The AI service encountered a temporary error. Please try again."
+                ext = res.get("extracted_data") or {}
+                inv_no = ext.get("invoice_number") or "N/A"
+                cite = _cite(inv_no) if store else inv_no
+                final_response = (
+                    f"Beleg **{cite}** (`{res.get('file_name')}`) wurde extrahiert"
+                    + (" und in SQLite gespeichert.\n\n" if store else " (nur Vorschau, nicht gespeichert).\n\n")
+                    + f"- **Lieferant**: {ext.get('vendor_name', 'N/A')} (USt-IdNr.: {ext.get('vat_id') or 'fehlt'})\n"
+                    + f"- **Rechnungsdatum**: {format_date_de(ext.get('invoice_date')) or ext.get('invoice_date', 'N/A')}\n"
+                    + f"- **Fälligkeitsdatum**: {format_date_de(ext.get('due_date')) or ext.get('due_date', 'N/A')}\n"
+                    + f"- **Nettobetrag**: {format_eur_de(ext.get('subtotal', 0.0))}\n"
+                    + f"- **Umsatzsteuer**: {format_eur_de(ext.get('tax_amount', 0.0))}\n"
+                    + f"- **Bruttobetrag**: **{format_eur_de(ext.get('total_amount', 0.0))}**\n"
+                    + f"- **Prüfstatus**: {ext.get('validation_status', 'GEPRÜFT')}"
+                )
 
-        # 6. Save assistant response
+            elif route == "propose_action":
+                act_type = intent["action_type"]
+                targets = intent.get("target_invoices") or []
+                if not targets:
+                    final_response = "Es wurden keine passenden Belege für diese Aktion gefunden."
+                else:
+                    label_de = (
+                        "Buchungsübergabe an DATEV (SKR03/SKR04)"
+                        if act_type == "post_datev"
+                        else "Statusänderung auf BEZAHLT (Paid)"
+                    )
+                    cites = ", ".join(_cite(t) for t in targets)
+                    desc = f"{label_de} für Beleg(e): {', '.join(targets)}"
+                    proposal = create_copilot_action_proposal(
+                        user_id=self.user_id,
+                        conversation_id=self.conversation_id,
+                        action_type=act_type,
+                        target_invoices=targets,
+                        description=desc,
+                        db_path=self.db_path,
+                    )
+                    final_response = (
+                        f"### Freigabe erforderlich: {label_de}\n\n"
+                        f"Ich habe folgende Aktion für {cites} vorbereitet:\n"
+                        f"- **Aktion**: {label_de}\n"
+                        f"- **Betroffene Belege**: {cites}\n\n"
+                        f"Bitte bestätigen Sie die Ausführung über die Freigabeschaltfläche unten. "
+                        f"Ohne menschliche Freigabe wird keine Änderung durchgeführt.\n\n"
+                        f"[ACTION_PROPOSAL: {proposal['action_id']}]"
+                    )
+
+            elif route == "excel_report":
+                _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                _uid = str(uuid.uuid4())[:8]
+                _filename = f"invoice_report_{_ts}_{_uid}.xlsx"
+                _reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+                os.makedirs(_reports_dir, exist_ok=True)
+                _output_path = os.path.join(_reports_dir, _filename)
+                res = self._report_agent.generate_report(user_query, output_path=_output_path)
+                if res.get("status") == "success":
+                    final_response = f"{res.get('message')} Download filename: {_filename}"
+                else:
+                    final_response = f"Excel-Export konnte nicht erstellt werden: {res.get('message')}"
+
+            elif route == "graph":
+                res = self._graph_agent.run(user_query)
+                chart_paths = res.get("chart_paths") or []
+                tags = "".join(f"\n[CHART: {cp}]" for cp in chart_paths)
+                final_response = f"{res.get('message', 'Visualisierung erstellt.')}{tags}"
+
+            elif route == "validation":
+                final_response = self._format_validation_summary(intent.get("target_invoices") or [])
+
+            elif route == "aggregate":
+                agg_data = compute_invoice_aggregate(intent.get("filter") or {}, user_id=self.user_id)
+                final_response = self._phrase_aggregate_answer(user_query, agg_data, context)
+
+            else:
+                # SQL + FTS5 Search combined with exact aggregate summary
+                qa_res = self._qa_agent.answer(user_query, chat_history=context.get("lc_messages"))
+                final_response = qa_res.get("answer", "")
+
+        except Exception as exc:
+            logger.error("Orchestrator routing error: %s", exc, exc_info=True)
+            final_response = f"Bei der Verarbeitung der Anfrage ist ein Fehler aufgetreten: {str(exc)}"
+
+        # Guardrail: Never allow em dashes in UI text or messages
+        final_response = final_response.replace("-", "-")
+
+        # 5. Save assistant response
         save_message(
             conversation_id=self.conversation_id,
             role="assistant",
             content=final_response,
             db_path=self.db_path,
         )
-
         return final_response
 
-    # ─────────────────────────── Helpers ─────────────────────────────
-
     def get_history(self, limit: Optional[int] = None) -> list[dict]:
-        """Return message history for this conversation (user-isolated)."""
         return get_messages(
             conversation_id=self.conversation_id,
             user_id=self.user_id,
@@ -741,10 +801,19 @@ class MainOrchestrator:
 
     @staticmethod
     def list_user_conversations(user_id: str, db_path: str = CHAT_DB_PATH) -> list[dict]:
-        """List all conversations for a given user, most-recently-updated first."""
         return list_conversations(user_id=user_id, db_path=db_path)
 
     @property
     def graph_agent(self) -> _GraphAgent:
-        """Expose the GraphAgent for Streamlit's direct figure rendering."""
         return self._graph_agent
+
+
+def format_number_de_val(val: Any) -> str:
+    if val is None or val == "":
+        return "-"
+    if isinstance(val, (int, float)):
+        return format_eur_de(val)
+    try:
+        return format_eur_de(float(val))
+    except Exception:
+        return str(val)

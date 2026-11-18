@@ -1,11 +1,10 @@
 /**
- * chat.js — Conversational AI Copilot on Paper
- * User messages as ink-filled slips, AI responses as typed paper memos.
+ * chat.js - Conversational AI Copilot on Paper (SQL-Only + Citations + Human Approval Cards)
  */
 
 import { api } from "./api.js";
 
-export function initChat({ getSessionContext, setConversationId, showToast }) {
+export function initChat({ getSessionContext, setConversationId, showToast, onActionResolved }) {
   const messagesContainer = document.getElementById("chat-messages");
   const textarea = document.getElementById("chat-textarea");
   const btnSend = document.getElementById("btn-chat-send");
@@ -19,54 +18,28 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
   const promptChips = document.querySelectorAll(".quick-prompt-chip");
 
   let attachedFile = null;
+  let isSending = false;
 
-  // Conversations will be loaded via window.chatController.loadConversations() once authenticated.
-
-  // 2. New Chat Button
   if (btnNewChat) {
     btnNewChat.addEventListener("click", () => {
       const newId = "conv_" + Math.random().toString(36).substring(2, 10);
       setConversationId(newId);
       clearMessages();
       appendAssistantMessage(
-        "**MEMO &bull; AI COPILOT INITIALIZED**\n\nI am connected to your invoice ledger and vector archive. You may query existing entries, request stamped Excel schedules, or attach a document for immediate analysis."
+        "**MEMO &bull; KI-ASSISTENT BEREIT (SQL & FTS5)**\n\nIch bin direkt mit Ihrer SQLite-Belegdatenbank, dem FTS5-Volltextindex und dem 9-Stufen-Prüfmodul verbunden. Alle Summen und Preisvergleiche werden exakt in Python berechnet, und jede Zahl verlinkt auf den Ursprungsbeleg."
       );
       highlightActiveConversation(newId);
-      showToast("Opened new ledger memo thread", "info");
+      showToast("Neue Konversation gestartet", "info");
     });
   }
 
-  let isSending = false;
-
-  function sanitizeErrorMessage(rawMsg) {
-    const lower = (rawMsg || "").toLowerCase();
-    if (
-      lower.includes("429") ||
-      lower.includes("rate limit") ||
-      lower.includes("rate_limit") ||
-      lower.includes("tokens") ||
-      lower.includes("quota")
-    ) {
-      return "The AI service is busy, please wait a few seconds and try again.";
-    }
-    if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("network")) {
-      return "The AI service connection timed out. Please try again shortly.";
-    }
-    if (lower.includes("org_") || lower.includes("gsk_") || lower.includes("{") || lower.includes("traceback")) {
-      return "The AI service is busy, please wait a few seconds and try again.";
-    }
-    return rawMsg || "The AI service encountered a temporary issue. Please try again.";
-  }
-
-  // 3. Quick Prompt Chips
   promptChips.forEach((chip) => {
     chip.addEventListener("click", () => {
       if (isSending) {
-        showToast("AI Copilot is currently processing a query...", "info");
+        showToast("KI-Assistent verarbeitet bereits eine Anfrage...", "info");
         return;
       }
       const prompt = chip.getAttribute("data-prompt") || chip.textContent.trim();
-      // Navigate user to AI Copilot Memos view immediately
       if (typeof window.switchView === "function") {
         window.switchView("chat");
       }
@@ -77,10 +50,8 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     });
   });
 
-  // 4. File Attachment Handler
   if (btnAttach && fileInput) {
     btnAttach.addEventListener("click", () => fileInput.click());
-
     fileInput.addEventListener("change", () => {
       if (fileInput.files && fileInput.files.length > 0) {
         setAttachedFile(fileInput.files[0]);
@@ -89,12 +60,9 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
   }
 
   if (btnRemoveAttach) {
-    btnRemoveAttach.addEventListener("click", () => {
-      clearAttachedFile();
-    });
+    btnRemoveAttach.addEventListener("click", () => clearAttachedFile());
   }
 
-  // 5. Send message on Enter (Shift+Enter for newline)
   if (textarea) {
     textarea.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -116,7 +84,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
   function setAttachedFile(file) {
     attachedFile = file;
     if (attachmentPreview && attachmentName) {
-      attachmentName.textContent = `ATTACHED: ${file.name} [${(file.size / 1024).toFixed(1)} KB]`;
+      attachmentName.textContent = `ANHANG: ${file.name} [${(file.size / 1024).toFixed(1)} KB]`;
       attachmentPreview.style.display = "flex";
     }
   }
@@ -127,7 +95,6 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     if (attachmentPreview) attachmentPreview.style.display = "none";
   }
 
-  // 6. Sending Messages (Guarded by isSending lock to prevent duplicate dispatches)
   async function sendMessage() {
     if (isSending) return;
     const text = textarea ? textarea.value.trim() : "";
@@ -140,10 +107,9 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     const { userId, conversationId } = getSessionContext();
     const currentFile = attachedFile;
 
-    // Append User Message as Ink-Filled Slip
     let userDisplay = text;
     if (currentFile) {
-      userDisplay += `\n\n*[Attached Document: ${currentFile.name}]*`;
+      userDisplay += `\n\n*[Angehängter Beleg: ${currentFile.name}]*`;
     }
     appendUserMessage(userDisplay);
 
@@ -153,52 +119,32 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     }
     clearAttachedFile();
 
-    // Show progressive thinking state
-    const thinkingId = appendAssistantMessage("Examining ledger records & semantic index...", true);
-    const thinkingStages = [
-      "Examining ledger records & semantic index...",
-      "Synthesizing financial entries & calculating totals...",
-      "Consulting multiagent pipeline & formatting memo...",
-      "Finalizing response dispatch...",
-    ];
-    let stageIndex = 0;
-    const thinkingInterval = setInterval(() => {
-      stageIndex = (stageIndex + 1) % thinkingStages.length;
-      const stageTextEl = document.getElementById(`${thinkingId}-stage-text`);
-      if (stageTextEl) {
-        stageTextEl.style.opacity = "0.4";
-        setTimeout(() => {
-          if (stageTextEl) {
-            stageTextEl.textContent = thinkingStages[stageIndex];
-            stageTextEl.style.opacity = "1";
-          }
-        }, 150);
-      }
-    }, 2600);
+    const thinkingId = appendAssistantMessage("Führe SQL/FTS5-Abfrage & Python-Berechnung aus...", true);
 
     try {
       const res = await api.chat({
-        message: text || "Please examine this invoice.",
+        message: text || "Bitte prüfe diesen Beleg.",
         userId,
         conversationId,
         file: currentFile,
       });
 
-      clearInterval(thinkingInterval);
       removeMessage(thinkingId);
-      appendAssistantMessage(res.response || "No reply dispatched from agent.");
+      appendAssistantMessage(res.response || "Keine Antwort erhalten.");
 
       if (res.conversation_id && res.conversation_id !== conversationId) {
         setConversationId(res.conversation_id);
       }
 
       loadConversations();
+      if (currentFile && typeof onActionResolved === "function") {
+        onActionResolved();
+      }
     } catch (err) {
-      clearInterval(thinkingInterval);
       removeMessage(thinkingId);
-      const friendlyMsg = sanitizeErrorMessage(err.message || "");
-      appendAssistantMessage(`**MEMO &bull; SERVICE NOTICE**\n\n${friendlyMsg}`);
-      showToast(friendlyMsg, "error");
+      const msg = err.message || "Vorübergehender Fehler bei der Anfrage.";
+      appendAssistantMessage(`**MEMO &bull; SYSTEMHINWEIS**\n\n${msg}`);
+      showToast(msg, "error");
     } finally {
       isSending = false;
       if (btnSend) btnSend.disabled = false;
@@ -206,7 +152,6 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     }
   }
 
-  // 7. Load Conversation History
   async function loadConversations() {
     if (!convListEl) return;
     const { userId, conversationId } = getSessionContext();
@@ -219,7 +164,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
       if (convs.length === 0) {
         convListEl.innerHTML = `
           <li style="padding: 1.5rem 1rem; text-align: center; color: var(--ink-muted); font-family: var(--font-mono); font-size: 0.72rem;">
-            [ NO FILED THREADS ]
+            [ KEINE ARCHIVIERTEN SITZUNGEN ]
           </li>`;
         return;
       }
@@ -229,16 +174,13 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
         li.className = `chat-conv-item ${c.conversation_id === conversationId ? "active" : ""}`;
         li.setAttribute("data-id", c.conversation_id);
 
-        const dateStr = c.updated_at ? new Date(c.updated_at).toLocaleDateString() : "";
+        const dateStr = c.updated_at ? new Date(c.updated_at).toLocaleDateString("de-DE") : "";
         li.innerHTML = `
-          <div class="conv-item-title">${escapeHtml(c.title || "Invoice Memo")}</div>
+          <div class="conv-item-title">${escapeHtml(c.title || "Beleg-Anfrage")}</div>
           <div class="conv-item-date">${dateStr} &bull; ${escapeHtml(c.conversation_id.slice(0, 8))}</div>
         `;
 
-        li.addEventListener("click", () => {
-          switchConversation(c.conversation_id);
-        });
-
+        li.addEventListener("click", () => switchConversation(c.conversation_id));
         convListEl.appendChild(li);
       });
     } catch (err) {
@@ -252,7 +194,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     highlightActiveConversation(convId);
 
     clearMessages();
-    const loadingId = appendAssistantMessage("*Retrieving transcript from archives...*", true);
+    const loadingId = appendAssistantMessage("*Lade Gesprächsverlauf aus SQLite...*", true);
 
     try {
       const res = await api.getChatHistory(convId, userId, 50);
@@ -260,7 +202,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
 
       const msgs = res.messages || [];
       if (msgs.length === 0) {
-        appendAssistantMessage("**MEMO &bull; EMPTY THREAD**\n\nNo prior dispatches recorded for this session.");
+        appendAssistantMessage("**MEMO &bull; LEERE SITZUNG**\n\nNoch keine Nachrichten in dieser Konversation.");
         return;
       }
 
@@ -270,19 +212,16 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
         } else if (m.role === "assistant") {
           appendAssistantMessage(m.content);
         }
-        // system messages are internal AI context (upload notices etc.)
-        // and are never rendered in the user-facing thread
       });
     } catch (err) {
       removeMessage(loadingId);
-      appendAssistantMessage(`Failed to retrieve archive: ${err.message}`);
+      appendAssistantMessage(`Fehler beim Laden: ${err.message}`);
     }
   }
 
   function highlightActiveConversation(convId) {
     if (!convListEl) return;
-    const items = convListEl.querySelectorAll(".chat-conv-item");
-    items.forEach((it) => {
+    convListEl.querySelectorAll(".chat-conv-item").forEach((it) => {
       it.classList.toggle("active", it.getAttribute("data-id") === convId);
     });
   }
@@ -296,7 +235,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     const div = document.createElement("div");
     div.className = "chat-msg user";
     div.innerHTML = `
-      <div class="chat-avatar" title="User">USER</div>
+      <div class="chat-avatar" title="Benutzer">ICH</div>
       <div class="msg-body">${formatMarkdown(text)}</div>
     `;
     messagesContainer.appendChild(div);
@@ -312,7 +251,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
 
     if (isTemporary) {
       div.innerHTML = `
-        <div class="chat-avatar" title="Assistant Memo">AI</div>
+        <div class="chat-avatar" title="KI-Assistent">KI</div>
         <div class="msg-body">
           <div class="chat-thinking-container">
             <span class="thinking-pulse-dot"></span>
@@ -326,11 +265,23 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
     }
 
     div.innerHTML = `
-      <div class="chat-avatar" title="Assistant Memo">AI</div>
+      <div class="chat-avatar" title="KI-Assistent">KI</div>
       <div class="msg-body">${formatMarkdown(text)}</div>
     `;
 
-    // Detect Excel report filename and render tear-off voucher
+    // Bind clickable invoice citation links [RE-2026-10418](#invoice/RE-2026-10418)
+    div.querySelectorAll("a[href^='#invoice/']").forEach((a) => {
+      a.classList.add("chat-citation-pill");
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        const invIdentifier = decodeURIComponent(a.getAttribute("href").replace("#invoice/", ""));
+        if (typeof window.openInvoiceDetail === "function") {
+          window.openInvoiceDetail(invIdentifier);
+        }
+      });
+    });
+
+    // Detect Excel report filename
     const reportMatch = text.match(/([a-zA-Z0-9_\-]+\.xlsx)/);
     if (reportMatch && reportMatch[1]) {
       const filename = reportMatch[1];
@@ -338,7 +289,7 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
       div.querySelector(".msg-body").appendChild(card);
     }
 
-    // Detect Chart HTML path and render interactive frame card
+    // Detect Chart HTML path
     const chartRegex = /(?:\[CHART:\s*([^\]]+)\]|\[(?:[^\]]*)\]\((\/static\/charts\/[^\)]+)\))/g;
     let chartMatch;
     const detectedUrls = new Set();
@@ -351,24 +302,69 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
       }
     }
 
+    // Tier 2: Detect Copilot Action Proposal [ACTION_PROPOSAL: act_xxx]
+    const actionMatch = text.match(/\[ACTION_PROPOSAL:\s*([a-zA-Z0-9_]+)\]/);
+    if (actionMatch && actionMatch[1]) {
+      const actionId = actionMatch[1].trim();
+      const approvalCard = createApprovalCard(actionId);
+      div.querySelector(".msg-body").appendChild(approvalCard);
+    }
+
     messagesContainer.appendChild(div);
     scrollToBottom();
     return id;
   }
 
-  function appendSystemMessage(text) {
-    if (!messagesContainer) return;
-    const div = document.createElement("div");
-    div.className = "chat-msg system";
-    div.style.alignSelf = "center";
-    div.style.maxWidth = "90%";
-    div.innerHTML = `
-      <div style="background: var(--paper-card); border: 1px dashed var(--ink-muted); padding: 0.5rem 0.85rem; font-size: 0.74rem; color: var(--ink-muted); font-family: var(--font-mono);">
-        [LEDGER SYSTEM LOG] ${escapeHtml(text)}
+  function createApprovalCard(actionId) {
+    const card = document.createElement("div");
+    card.className = "report-download-card";
+    card.style.borderColor = "var(--stamp-amber)";
+    card.style.background = "#FBF4E6";
+    card.innerHTML = `
+      <div class="report-file-meta">
+        <span class="stamp-badge pending">FREIGABE ERFORDERLICH</span>
+        <div class="report-file-info">
+          <strong>Menschliche Bestätigung vor Ausführung</strong>
+          <span>Vorgangs-ID: ${escapeHtml(actionId)}</span>
+        </div>
+      </div>
+      <div style="display:flex; gap:0.5rem;" id="approval-btns-${escapeHtml(actionId)}">
+        <button type="button" class="btn-secondary btn-reject-action" style="font-size:0.74rem; padding:0.35rem 0.7rem;">
+          ABBRECHEN
+        </button>
+        <button type="button" class="btn-primary btn-approve-action" style="font-size:0.74rem; padding:0.35rem 0.8rem; background:var(--stamp-green); border-color:var(--stamp-green);">
+          FREIGEBEN & AUSFÜHREN
+        </button>
       </div>
     `;
-    messagesContainer.appendChild(div);
-    scrollToBottom();
+
+    const btnApprove = card.querySelector(".btn-approve-action");
+    const btnReject = card.querySelector(".btn-reject-action");
+    const btnWrap = card.querySelector(`#approval-btns-${actionId}`);
+
+    async function handleDecision(decision) {
+      if (btnApprove) btnApprove.disabled = true;
+      if (btnReject) btnReject.disabled = true;
+      try {
+        const res = await api.resolveCopilotAction(actionId, decision);
+        if (btnWrap) {
+          const isApproved = res.action_status === "approved";
+          btnWrap.innerHTML = `<span class="stamp-badge ${isApproved ? "paid" : "failed"}">${isApproved ? "FREIGEGEBEN & AUSGEFÜHRT" : "ABGELEHNT"}</span>`;
+        }
+        showToast(res.message || "Vorgang aktualisiert", "success");
+        if (typeof onActionResolved === "function") {
+          onActionResolved();
+        }
+      } catch (err) {
+        showToast(err.message || "Fehler bei der Freigabe", "error");
+        if (btnApprove) btnApprove.disabled = false;
+        if (btnReject) btnReject.disabled = false;
+      }
+    }
+
+    if (btnApprove) btnApprove.addEventListener("click", () => handleDecision("approve"));
+    if (btnReject) btnReject.addEventListener("click", () => handleDecision("reject"));
+    return card;
   }
 
   function removeMessage(id) {
@@ -394,22 +390,15 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="8" y1="13" x2="16" y2="13"></line>
-            <line x1="8" y1="17" x2="16" y2="17"></line>
           </svg>
         </div>
         <div class="report-file-info">
-          <strong>EXCEL SCHEDULE DISPATCHED</strong>
+          <strong>EXCEL-AUSWERTUNG ERSTELLT</strong>
           <span>${escapeHtml(filename)}</span>
         </div>
       </div>
       <a href="${downloadUrl}" download="${filename}" class="btn-primary" style="text-decoration:none; padding: 0.35rem 0.75rem; font-size: 0.75rem;">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-        TEAR OFF & DOWNLOAD
+        HERUNTERLADEN
       </a>
     `;
     return card;
@@ -428,21 +417,12 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
 
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px dashed var(--hairline); padding-bottom: 0.4rem;">
-        <div style="display:flex; align-items:center; gap:0.4rem;">
-          <div class="report-file-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75">
-              <line x1="18" y1="20" x2="18" y2="10"></line>
-              <line x1="12" y1="20" x2="12" y2="4"></line>
-              <line x1="6" y1="20" x2="6" y2="14"></line>
-            </svg>
-          </div>
-          <strong style="font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;">VISUALIZATION SCHEDULE &bull; DISPATCHED</strong>
-        </div>
+        <strong style="font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;">DIAGRAMM-AUSWERTUNG</strong>
         <a href="${chartUrl}" target="_blank" class="btn-secondary" style="text-decoration:none; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-family: var(--font-mono);">
-          EXPAND ↗
+          VOLLBILD ↗
         </a>
       </div>
-      <div style="width: 100%; height: 380px; background: #FDFBF5; border: 1px solid var(--hairline); border-radius: 2px; overflow: hidden;">
+      <div style="width: 100%; height: 340px; background: #FDFBF5; border: 1px solid var(--hairline); border-radius: 2px; overflow: hidden;">
         <iframe src="${chartUrl}" style="width: 100%; height: 100%; border: none;" loading="lazy"></iframe>
       </div>
     `;
@@ -451,13 +431,16 @@ export function initChat({ getSessionContext, setConversationId, showToast }) {
 
   function formatMarkdown(text) {
     let cleanText = (text || "")
+      .replace(/-/g, "-")
       .replace(/\[CHART:\s*[^\]]+\]/g, "")
+      .replace(/\[ACTION_PROPOSAL:\s*[^\]]+\]/g, "")
       .replace(/\[(?:[^\]]*)\]\(\/static\/charts\/[^\)]+\)/g, "")
       .trim();
     if (typeof marked !== "undefined" && typeof marked.parse === "function") {
       return marked.parse(cleanText);
     }
     let html = escapeHtml(cleanText)
+      .replace(/\[([^\]]+)\]\((#invoice\/[^\)]+)\)/g, '<a href="$2" class="chat-citation-pill">$1</a>')
       .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
       .replace(/\*(.*?)\*/g, "<em>$1</em>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")

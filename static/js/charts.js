@@ -1,54 +1,46 @@
 /**
- * charts.js — Ink-Style Ledger Visualizations for Paper Invoice Theme
+ * charts.js - Ink-Style Ledger Visualizations with German Locale (1.234,56 € and DD.MM.YYYY)
  */
 
 let trendChartInstance = null;
 let donutChartInstance = null;
 let vendorChartInstance = null;
 
-const CURRENCY_SYMBOLS = {
-  INR: "₹", "₹": "₹", RUPEE: "₹", RS: "₹",
-  USD: "$", "$": "$", DOLLAR: "$",
-  EUR: "€", "€": "€", EURO: "€",
-  GBP: "£", "£": "£", POUND: "£",
-};
-
-function currencySymbol(currency) {
-  const key = (currency || "").toString().trim().toUpperCase();
-  return CURRENCY_SYMBOLS[key] || "₹";
+export function formatNumberDE(amount, decimals = 2) {
+  const num = parseFloat(amount) || 0;
+  return num.toLocaleString("de-DE", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 }
 
-function dominantCurrency(invoices) {
-  const counts = {};
-  (invoices || []).forEach((inv) => {
-    const key = (inv.currency || "").toString().trim().toUpperCase();
-    if (key) counts[key] = (counts[key] || 0) + 1;
-  });
-  let best = "", bestCount = 0;
-  Object.entries(counts).forEach(([k, v]) => { if (v > bestCount) { best = k; bestCount = v; } });
-  return best || "INR";
+export function formatMoneyDE(amount, currency = "EUR") {
+  const sym = (currency || "EUR").toUpperCase() === "EUR" ? "€" : currency;
+  return `${formatNumberDE(amount, 2)} ${sym}`;
+}
+
+export function formatDateDE(dateStr) {
+  if (!dateStr || dateStr === "N/A" || dateStr === "Unknown") return "-";
+  const s = String(dateStr).trim();
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}.${isoMatch[2]}.${isoMatch[1]}`;
+  }
+  const dmyMatch = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (dmyMatch) {
+    return `${dmyMatch[1].padStart(2, "0")}.${dmyMatch[2].padStart(2, "0")}.${dmyMatch[3]}`;
+  }
+  return s;
 }
 
 function cleanVendorName(raw) {
-  if (!raw) return "Unknown Vendor";
+  if (!raw) return "Unbekannter Lieferant";
   if (typeof raw === "object") {
-    return raw.name || raw.vendor_name || raw.company_name || raw.seller || raw.title || "Unknown Vendor";
+    return raw.name || raw.vendor_name || raw.company_name || raw.seller || "Unbekannter Lieferant";
   }
-  let str = String(raw).trim();
+  const str = String(raw).trim();
   if (!str || str.toLowerCase() === "unknown" || str.toLowerCase() === "unknown vendor" || str.toLowerCase() === "n/a") {
-    return "Unknown Vendor";
-  }
-  if ((str.startsWith("{") && str.endsWith("}")) || (str.startsWith("(") && str.endsWith(")"))) {
-    try {
-      const normalized = str.replace(/'/g, '"');
-      const parsed = JSON.parse(normalized);
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed.name || parsed.vendor_name || parsed.company_name || parsed.seller || "Unknown Vendor";
-      }
-    } catch (e) {
-      const match = str.match(/['"](?:name|vendor_name|company|seller)['"]\s*:\s*['"]([^'"]+)['"]/i);
-      if (match && match[1]) return match[1].trim();
-    }
+    return "Unbekannter Lieferant";
   }
   return str;
 }
@@ -57,42 +49,21 @@ function parseInvoiceDate(inv) {
   const raw = inv.invoice_date || inv.date || inv.issue_date || inv.created_at || "";
   if (!raw || raw === "N/A" || raw === "Unknown") return null;
   const str = String(raw).trim();
-
   const isoMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (isoMatch) {
-    const y = isoMatch[1];
-    const m = isoMatch[2].padStart(2, "0");
-    const d = isoMatch[3].padStart(2, "0");
-    return `${y}-${m}-${d}`;
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(2, "0")}`;
   }
-
   const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
   if (dmyMatch) {
-    const d = dmyMatch[1].padStart(2, "0");
-    const m = dmyMatch[2].padStart(2, "0");
-    const y = dmyMatch[3];
-    return `${y}-${m}-${d}`;
+    return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, "0")}-${dmyMatch[1].padStart(2, "0")}`;
   }
-
-  const parsed = new Date(str);
-  if (!isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, "0");
-    const d = String(parsed.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
   return null;
 }
 
 export const charts = {
-  /**
-   * Set global Chart.js defaults to fit Paper Invoice theme
-   */
   initDefaults() {
     if (typeof Chart === "undefined") return;
-
-    Chart.defaults.color = "#6E6455"; // --ink-muted
+    Chart.defaults.color = "#6E6455";
     Chart.defaults.font.family = "'IBM Plex Mono', monospace";
     Chart.defaults.font.size = 10;
     Chart.defaults.plugins.tooltip.backgroundColor = "#FDFBF5";
@@ -104,31 +75,23 @@ export const charts = {
     Chart.defaults.plugins.tooltip.cornerRadius = 0;
   },
 
-  /**
-   * Render or update charts and ruled tables
-   */
   renderAll(invoices = []) {
+    this.renderTopVendors(invoices);
+    this.renderStatusDonut(invoices);
     if (typeof Chart === "undefined") return;
     this.initDefaults();
-
     this.renderSpendTrend(invoices);
-    this.renderStatusDonut(invoices);
-    this.renderTopVendors(invoices);
   },
 
-  /**
-   * 1. Spend Trajectory — Connected ink line, chronological date grouping, Rupee amounts
-   */
   renderSpendTrend(invoices) {
     const canvas = document.getElementById("chart-spend-trend");
-    if (!canvas) return;
+    if (!canvas || typeof Chart === "undefined") return;
     const ctx = canvas.getContext("2d");
-    const sym = currencySymbol(dominantCurrency(invoices));
 
     const dateMap = {};
     invoices.forEach((inv) => {
       const parsedDate = parseInvoiceDate(inv);
-      const key = parsedDate || new Date().toISOString().slice(0, 10);
+      const key = parsedDate || "2026-10-06";
       const amt = parseFloat(inv.total_amount) || 0;
       dateMap[key] = (dateMap[key] || 0) + amt;
     });
@@ -138,18 +101,14 @@ export const charts = {
     let values = [];
 
     if (sortedKeys.length === 0) {
-      labels = ["Baseline", "Live"];
+      labels = ["Start", "Aktuell"];
       values = [0, 0];
     } else if (sortedKeys.length === 1) {
-      // Provide an opening anchor point so a multi-point trajectory line renders cleanly
       const singleDate = sortedKeys[0];
-      const prevDateObj = new Date(singleDate);
-      prevDateObj.setDate(prevDateObj.getDate() - 7);
-      const prevDateKey = prevDateObj.toISOString().slice(0, 10);
-      labels = [prevDateKey, singleDate];
+      labels = ["Vorperiode", formatDateDE(singleDate)];
       values = [0, dateMap[singleDate]];
     } else {
-      labels = sortedKeys;
+      labels = sortedKeys.map((k) => formatDateDE(k));
       values = sortedKeys.map((k) => dateMap[k]);
     }
 
@@ -163,13 +122,13 @@ export const charts = {
         labels,
         datasets: [
           {
-            label: `Disbursement (${sym})`,
+            label: "Betrag (€)",
             data: values,
-            borderColor: "#1C1710", // Pure Ink line
+            borderColor: "#1C1710",
             borderWidth: 2,
             backgroundColor: "transparent",
-            fill: false, // Strictly no area fill
-            tension: 0, // Sharp crisp ledger line
+            fill: false,
+            tension: 0,
             pointBackgroundColor: "#1C1710",
             pointBorderColor: "#FDFBF5",
             pointBorderWidth: 1.5,
@@ -183,27 +142,23 @@ export const charts = {
         maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (context) => formatMoneyDE(context.parsed.y),
+            },
+          },
         },
         scales: {
           x: {
-            grid: {
-              color: "#E2D9C4",
-              borderDash: [2, 2],
-            },
-            ticks: {
-              color: "#6E6455",
-              font: { family: "'IBM Plex Mono', monospace", size: 10 },
-            },
+            grid: { color: "#E2D9C4", borderDash: [2, 2] },
+            ticks: { color: "#6E6455", font: { family: "'IBM Plex Mono', monospace", size: 10 } },
           },
           y: {
-            grid: {
-              color: "#E2D9C4",
-              borderDash: [2, 2],
-            },
+            grid: { color: "#E2D9C4", borderDash: [2, 2] },
             ticks: {
               color: "#6E6455",
               font: { family: "'IBM Plex Mono', monospace", size: 10 },
-              callback: (val) => `${sym}${Number(val).toLocaleString("en-IN")}`,
+              callback: (val) => `${formatNumberDE(val, 0)} €`,
             },
           },
         },
@@ -211,9 +166,6 @@ export const charts = {
     });
   },
 
-  /**
-   * 2. Settlement Status — Ruled rows with stamp counts & subtle ink donut
-   */
   renderStatusDonut(invoices) {
     let paidCount = 0;
     let unpaidCount = 0;
@@ -221,9 +173,9 @@ export const charts = {
 
     invoices.forEach((inv) => {
       const status = (inv.payment_status || "").toLowerCase();
-      if (status.includes("paid") && !status.includes("unpaid")) {
+      if ((status.includes("paid") && !status.includes("unpaid")) || status.includes("bezahlt")) {
         paidCount++;
-      } else if (status.includes("overdue")) {
+      } else if (status.includes("overdue") || status.includes("überfällig")) {
         overdueCount++;
       } else {
         unpaidCount++;
@@ -235,7 +187,6 @@ export const charts = {
     const unpaidPct = Math.round((unpaidCount / total) * 100);
     const overduePct = Math.round((overdueCount / total) * 100);
 
-    // Update ruled row counts & percentages
     const setText = (id, val) => {
       const el = document.getElementById(id);
       if (el) el.textContent = val;
@@ -250,7 +201,7 @@ export const charts = {
     setText("legend-pct-overdue", `${overduePct}%`);
 
     const canvas = document.getElementById("chart-status-donut");
-    if (!canvas) return;
+    if (!canvas || typeof Chart === "undefined") return;
     const ctx = canvas.getContext("2d");
 
     if (donutChartInstance) {
@@ -260,7 +211,7 @@ export const charts = {
     donutChartInstance = new Chart(ctx, {
       type: "doughnut",
       data: {
-        labels: ["Paid", "Pending", "Overdue"],
+        labels: ["Bezahlt", "Offen", "Überfällig"],
         datasets: [
           {
             data: [paidCount, unpaidCount, overdueCount],
@@ -275,22 +226,16 @@ export const charts = {
         responsive: true,
         maintainAspectRatio: false,
         cutout: "80%",
-        plugins: {
-          legend: { display: false },
-        },
+        plugins: { legend: { display: false } },
       },
     });
   },
 
-  /**
-   * 3. Top Vendors — Rendered as a ruled ledger table
-   */
   renderTopVendors(invoices) {
-    const sym = currencySymbol(dominantCurrency(invoices));
     const vendorMap = {};
     invoices.forEach((inv) => {
       const vendor = cleanVendorName(inv.vendor_name || inv.seller);
-      if (vendor && vendor !== "Unknown Vendor" && vendor !== "Unknown" && vendor !== "N/A") {
+      if (vendor && vendor !== "Unbekannter Lieferant") {
         const amt = parseFloat(inv.total_amount) || 0;
         vendorMap[vendor] = (vendorMap[vendor] || 0) + amt;
       }
@@ -300,77 +245,24 @@ export const charts = {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
 
-    // 1. Populate Ruled Table
     const tableBody = document.getElementById("top-vendors-table-body");
     if (tableBody) {
       if (sortedVendors.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">No vendor records filed yet.</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Noch keine Lieferantenbelege erfasst.</td></tr>`;
       } else {
         tableBody.innerHTML = sortedVendors
-          .map(([vendor, amt], idx) => `
-            <tr>
+          .map(
+            ([vendor, amt], idx) => `
+            <tr style="cursor:pointer;" onclick="window.switchView && window.switchView('vendors')">
               <td style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">${idx + 1}.</td>
               <td><strong>${escapeHtml(vendor)}</strong></td>
-              <td class="mono-amount" style="text-align:right;">${sym}${amt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+              <td class="mono-amount" style="text-align:right;">${formatMoneyDE(amt)}</td>
             </tr>
-          `)
+          `
+          )
           .join("");
       }
     }
-
-    // 2. Also keep canvas updated if element present
-    const canvas = document.getElementById("chart-vendor-bars");
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-
-    const labels = sortedVendors.map((item) => (item[0].length > 18 ? item[0].slice(0, 15) + "..." : item[0]));
-    const data = sortedVendors.map((item) => item[1]);
-
-    if (vendorChartInstance) {
-      vendorChartInstance.destroy();
-    }
-
-    vendorChartInstance = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: labels.length ? labels : ["No data"],
-        datasets: [
-          {
-            label: `Spend (${sym})`,
-            data: data.length ? data : [0],
-            backgroundColor: "#1C1710",
-            borderColor: "#1C1710",
-            borderWidth: 1,
-            borderRadius: 0,
-          },
-        ],
-      },
-      options: {
-        indexAxis: "y",
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-        },
-        scales: {
-          x: {
-            grid: { color: "#E2D9C4", borderDash: [2, 2] },
-            ticks: {
-              color: "#6E6455",
-              font: { family: "'IBM Plex Mono', monospace", size: 9 },
-              callback: (val) => `${sym}${Number(val).toLocaleString("en-IN")}`,
-            },
-          },
-          y: {
-            grid: { display: false },
-            ticks: {
-              color: "#1C1710",
-              font: { family: "'IBM Plex Mono', monospace", size: 9 },
-            },
-          },
-        },
-      },
-    });
   },
 };
 

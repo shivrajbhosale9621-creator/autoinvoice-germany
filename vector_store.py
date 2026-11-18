@@ -1,43 +1,27 @@
 """
-vector_store.py - Unified ChromaDB Vector Database & Semantic Search Module.
+vector_store.py - SQL-Only Invoice Storage & FTS5 Search Engine (Task 1).
 
-Centralized interface for:
-- Initializing and loading the persistent ChromaDB collection.
-- Extracting normalized invoice records across all stored documents.
-- Generating the unified Global Markdown Summary Matrix table.
-- Performing semantic similarity search across the vector space.
-- Persisting new invoice documents and deleting existing records.
-- Seamless compatibility with QA Agent, Graph Agent, and Report Generator.
+ChromaDB vector search has been completely replaced with SQLite + FTS5.
+All invoice persistence, retrieval, aggregation, and full-text search run
+directly against the SQLite `invoices` table and `invoices_fts` FTS5 index.
 """
 
 import os
-# Ensure OpenMP runtime conflict does not trigger hard abort on Windows
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
+import re
 import json
 import uuid
+import sqlite3
 import logging
+import contextvars as _contextvars
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-# IMPORTANT: chromadb and its onnxruntime dependency must be imported before pandas/numpy on Windows
-import chromadb
-from chromadb.utils import embedding_functions
 import pandas as pd
 
-from config import DEFAULT_CHROMA_PATH, DEFAULT_CHROMA_COLLECTION, DEFAULT_INDEX_PATH
+from config import CHAT_DB_PATH, DEFAULT_CHROMA_PATH, DEFAULT_INDEX_PATH
+from chat_store import init_db
 
 logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------
-# 0. Per-request user scoping (multi-tenancy guard)
-# -------------------------------------------------------------
-# Agents and tools that read invoice data MUST be scoped to the
-# current user. Callers either pass user_id explicitly or set this
-# context variable once per request (the orchestrator does). Data
-# functions resolve the effective user as: explicit arg -> context.
-import contextvars as _contextvars
 
 _CURRENT_USER_ID: "_contextvars.ContextVar[Optional[str]]" = _contextvars.ContextVar(
     "autoinvoice_current_user_id", default=None
@@ -55,644 +39,1235 @@ def _resolve_user_id(user_id: Optional[str]) -> Optional[str]:
     return _CURRENT_USER_ID.get()
 
 
-# -------------------------------------------------------------
-# 1. Compatibility Node Wrapper (Emulates LlamaIndex/LangChain Node)
-# -------------------------------------------------------------
-class ChromaNode:
-	"""
-	Lightweight node representation compatible with agent consumers.
-	Provides .get_content(), .text, and .metadata attributes.
-	"""
-
-	def __init__(self, text: str, metadata: Optional[Dict[str, Any]] = None, id: str = ""):
-		self.text = text
-		self.metadata = metadata or {}
-		self.id = id
-
-	def get_content(self) -> str:
-		return self.text
-
-	def __repr__(self) -> str:
-		return f"<ChromaNode id='{self.id}' text_len={len(self.text)} metadata={self.metadata}>"
-
-
-# -------------------------------------------------------------
-# 2. ChromaDB Client & Collection Management
-# -------------------------------------------------------------
-_embedding_fn = None
-_clients: Dict[str, chromadb.PersistentClient] = {}
+def _user_id_variants(user_id: Optional[str]) -> List[str]:
+    """Return both hyphenated and hex UUID variants for user_id matching."""
+    uid = _resolve_user_id(user_id)
+    if not uid:
+        return []
+    u_str = str(uid).strip()
+    u_clean = u_str.replace("-", "")
+    variants = [u_str]
+    if u_clean != u_str:
+        variants.append(u_clean)
+    try:
+        u_obj = uuid.UUID(u_str)
+        for v in (str(u_obj), u_obj.hex):
+            if v not in variants:
+                variants.append(v)
+    except Exception:
+        pass
+    return variants
 
 
-def get_embedding_function():
-	"""Singleton embedding function for ChromaDB (all-MiniLM-L6-v2, 100% local, zero cost)."""
-	global _embedding_fn
-	if _embedding_fn is None:
-		_embedding_fn = embedding_functions.DefaultEmbeddingFunction()
-	return _embedding_fn
+def load_index(index_path: str = DEFAULT_CHROMA_PATH) -> str:
+    """Compatibility helper returning the active SQLite database path."""
+    init_db(CHAT_DB_PATH)
+    return CHAT_DB_PATH
 
 
-def get_chroma_client(path: str = DEFAULT_CHROMA_PATH) -> chromadb.PersistentClient:
-	"""
-	Get or create a persistent ChromaDB client.
-	Safely falls back to DEFAULT_CHROMA_PATH if legacy invoice_index path is passed.
-	"""
-	if not path or "invoice_index" in path:
-		path = DEFAULT_CHROMA_PATH
+GERMAN_MONTHS = {
+    "januar": 1, "jan": 1,
+    "februar": 2, "feb": 2,
+    "märz": 3, "maerz": 3, "mrz": 3,
+    "april": 4, "apr": 4,
+    "mai": 5,
+    "juni": 6, "jun": 6,
+    "juli": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "oktober": 10, "okt": 10,
+    "november": 11, "nov": 11,
+    "dezember": 12, "dez": 12,
+}
 
-	resolved_path = os.path.abspath(path)
-	if resolved_path not in _clients:
-		os.makedirs(resolved_path, exist_ok=True)
-		_clients[resolved_path] = chromadb.PersistentClient(path=resolved_path)
-	return _clients[resolved_path]
-
-
-def get_collection(
-	path: str = DEFAULT_CHROMA_PATH,
-	collection_name: str = DEFAULT_CHROMA_COLLECTION
-):
-	"""
-	Get or create the target ChromaDB collection with the default embedding function.
-	"""
-	client = get_chroma_client(path)
-	return client.get_or_create_collection(
-		name=collection_name,
-		embedding_function=get_embedding_function()
-	)
-
-
-def load_index(index_path: str = DEFAULT_CHROMA_PATH):
-	"""
-	Compatibility alias for agent entrypoints: returns the active Chroma collection.
-	"""
-	return get_collection(path=index_path)
-
-
-import re
 
 def parse_numeric(val: Any, default: float = 0.0) -> float:
-	"""Sanitize and parse numeric currency or float values."""
-	if val is None:
-		return default
-	if isinstance(val, (int, float)):
-		return float(val)
-	val_str = str(val).strip()
-	if not val_str or val_str.lower() in ("n/a", "none", "null", "unknown", "-"):
-		return default
-	# Remove currency symbols ($, €, £, ¥, ₹), commas, spaces
-	cleaned = re.sub(r"[^\d.-]", "", val_str)
-	try:
-		return float(cleaned)
-	except (ValueError, TypeError):
-		return default
+    """
+    Parse numeric currency or float values, supporting both German format
+    (1.234,56, 1.500, 225,80-, 0,152 €) and standard float strings (1234.56).
+    """
+    if val is None or isinstance(val, bool):
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    val_str = str(val).strip()
+    if not val_str or val_str.lower() in ("n/a", "none", "null", "unknown", "-", ""):
+        return default
+
+    trailing_minus = False
+    cleaned_tokens = re.sub(r"(?:EUR|USD|INR|GBP|CHF|€|\$|₹|£|%|Stk|psch|m)\b", "", val_str, flags=re.IGNORECASE).strip()
+    cleaned_tokens = cleaned_tokens.replace("€", "").replace("$", "").replace("₹", "").strip()
+    if cleaned_tokens.endswith("-"):
+        trailing_minus = True
+        cleaned_tokens = cleaned_tokens[:-1].strip()
+    elif cleaned_tokens.startswith("-"):
+        trailing_minus = True
+        cleaned_tokens = cleaned_tokens[1:].strip()
+
+    if "." in cleaned_tokens and "," in cleaned_tokens:
+        if cleaned_tokens.rfind(",") > cleaned_tokens.rfind("."):
+            # German: 1.234,56 -> 1234.56
+            cleaned_tokens = cleaned_tokens.replace(".", "").replace(",", ".")
+        else:
+            # English: 1,234.56 -> 1234.56
+            cleaned_tokens = cleaned_tokens.replace(",", "")
+    elif "," in cleaned_tokens:
+        parts = cleaned_tokens.split(",")
+        if len(parts) == 2 and len(parts[1]) in (1, 2, 3):
+            cleaned_tokens = cleaned_tokens.replace(",", ".")
+        else:
+            cleaned_tokens = cleaned_tokens.replace(",", "")
+    elif "." in cleaned_tokens:
+        # German integer thousands grouping: e.g. "1.000", "1.500", "25.000"
+        if re.match(r"^\d{1,3}(?:\.\d{3})+$", cleaned_tokens):
+            cleaned_tokens = cleaned_tokens.replace(".", "")
+
+    cleaned_num = re.sub(r"[^\d.]", "", cleaned_tokens)
+    if not cleaned_num:
+        return default
+    try:
+        res = float(cleaned_num)
+        return -res if trailing_minus else res
+    except (ValueError, TypeError):
+        return default
+
+
+def parse_german_date(val: Any) -> str:
+    """
+    Parse a German or ISO date string into canonical YYYY-MM-DD format.
+    """
+    if not val:
+        return ""
+    s = str(val).strip()
+    if not s or s.lower() in ("n/a", "none", "null", "unknown", "-"):
+        return ""
+
+    m_iso = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", s)
+    if m_iso:
+        y, mo, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    m_dmy = re.search(r"\b(\d{1,2})[./\s]+(\d{1,2})[./\s]+(\d{4})\b", s)
+    if m_dmy:
+        d, mo, y = int(m_dmy.group(1)), int(m_dmy.group(2)), int(m_dmy.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    m_named = re.search(r"\b(\d{1,2})\.?\s+([A-Za-zÄÖÜäöüß]+)\s+(\d{4})\b", s)
+    if m_named:
+        d = int(m_named.group(1))
+        m_name = m_named.group(2).lower()
+        y = int(m_named.group(3))
+        mo = GERMAN_MONTHS.get(m_name)
+        if mo and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    return s
+
+
+def format_number_de(val: Any, decimals: int = 2) -> str:
+    """Format a number in German locale: 1234.56 -> '1.234,56'."""
+    num = parse_numeric(val, 0.0)
+    sign = "-" if num < 0 else ""
+    abs_num = abs(num)
+    formatted = f"{abs_num:,.{decimals}f}"
+    de_str = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{sign}{de_str}"
+
+
+def format_eur_de(val: Any) -> str:
+    """Format a monetary amount in German EUR format: '1.234,56 €'."""
+    return f"{format_number_de(val, 2)} €"
+
+
+def format_date_de(val: Any) -> str:
+    """Format a date string into German DD.MM.YYYY format."""
+    iso = parse_german_date(val)
+    if not iso:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", iso)
+    if m:
+        return f"{m.group(3)}.{m.group(2)}.{m.group(1)}"
+    return str(val)
 
 
 def normalize_invoice_data(raw_data: dict, file_name: str = "") -> dict:
-	"""
-	Robust multi-schema normalizer for invoice dictionaries extracted by LLMs or OCR.
-	Handles nested 'fields', varied vendor/customer synonyms, currency strings, and missing fields.
-	"""
-	if not isinstance(raw_data, dict):
-		raw_data = {}
+    """
+    Multi-schema normalizer for German & international invoice dicts.
+    Strictly preserves printed numbers for validation and never fabricates subtotal
+    from total_amount (derives subtotal only from line items if missing, else 0.0).
+    """
+    if not isinstance(raw_data, dict):
+        raw_data = {}
 
-	fields = raw_data.get("fields") if isinstance(raw_data.get("fields"), dict) else {}
+    fields = raw_data.get("fields") if isinstance(raw_data.get("fields"), dict) else {}
 
-	def extract_clean_str(v):
-		if v is None:
-			return ""
-		if isinstance(v, dict):
-			for sub_key in ("name", "vendor_name", "company_name", "seller", "title", "vendor"):
-				if v.get(sub_key) and str(v[sub_key]).strip():
-					return str(v[sub_key]).strip()
-			return ""
-		s = str(v).strip()
-		if (s.startswith("{") and s.endswith("}")) or (s.startswith("(") and s.endswith(")")):
-			try:
-				parsed = json.loads(s.replace("'", '"'))
-				if isinstance(parsed, dict):
-					return extract_clean_str(parsed)
-			except Exception:
-				m = re.search(r"['\"](?:name|vendor_name|company|seller)['\"]\s*:\s*['\"]([^'\"]+)['\"]", s, re.IGNORECASE)
-				if m:
-					return m.group(1).strip()
-		return s
+    def extract_clean_str(v):
+        if v is None:
+            return ""
+        if isinstance(v, dict):
+            for sub_key in ("name", "vendor_name", "company_name", "seller", "title", "vendor"):
+                if v.get(sub_key) and str(v[sub_key]).strip():
+                    return str(v[sub_key]).strip()
+            return ""
+        s = str(v).strip()
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("(") and s.endswith(")")):
+            try:
+                parsed = json.loads(s.replace("'", '"'))
+                if isinstance(parsed, dict):
+                    return extract_clean_str(parsed)
+            except Exception:
+                m = re.search(r"['\"](?:name|vendor_name|company|seller)['\"]\s*:\s*['\"]([^'\"]+)['\"]", s, re.IGNORECASE)
+                if m:
+                    return m.group(1).strip()
+        return s
 
-	def find_str(*keys, default=""):
-		for k in keys:
-			if k in raw_data:
-				val = extract_clean_str(raw_data.get(k))
-				if val and val.lower() not in ("none", "null", "n/a", "unknown"):
-					return val
-			if k in fields:
-				val = extract_clean_str(fields.get(k))
-				if val and val.lower() not in ("none", "null", "n/a", "unknown"):
-					return val
-		return default
+    def find_str(*keys, default=""):
+        for k in keys:
+            if k in raw_data and raw_data.get(k) is not None:
+                val = extract_clean_str(raw_data.get(k))
+                if val and val.lower() not in ("none", "null", "n/a", "unknown"):
+                    return val
+            if k in fields and fields.get(k) is not None:
+                val = extract_clean_str(fields.get(k))
+                if val and val.lower() not in ("none", "null", "n/a", "unknown"):
+                    return val
+        return default
 
-	def find_float(*keys, default=0.0):
-		for k in keys:
-			if k in raw_data and raw_data[k] is not None:
-				amt = parse_numeric(raw_data[k], default=default)
-				if amt != 0.0:
-					return amt
-			if k in fields and fields[k] is not None:
-				amt = parse_numeric(fields[k], default=default)
-				if amt != 0.0:
-					return amt
-		return default
+    def find_float(*keys, default=0.0):
+        for k in keys:
+            if k in raw_data and raw_data[k] is not None and str(raw_data[k]).strip() != "":
+                amt = parse_numeric(raw_data[k], default=default)
+                if amt != 0.0:
+                    return amt
+            if k in fields and fields[k] is not None and str(fields[k]).strip() != "":
+                amt = parse_numeric(fields[k], default=default)
+                if amt != 0.0:
+                    return amt
+        return default
 
-	# 1. Invoice Number
-	inv_num = find_str(
-		"invoice_number", "invoice_no", "inv_number", "inv_no",
-		"invoice_id", "bill_number", "bill_no", "receipt_no",
-		"order_number", "order_no", "invoice_num", default=""
-	)
-	if not inv_num:
-		if file_name:
-			base = os.path.splitext(os.path.basename(file_name))[0]
-			inv_num = base
-		else:
-			inv_num = "N/A"
+    inv_num = find_str(
+        "invoice_number", "rechnungsnummer", "invoice_no", "inv_number", "inv_no",
+        "invoice_id", "bill_number", "gutschrift_nr", default=""
+    )
+    if not inv_num:
+        if file_name:
+            inv_num = os.path.splitext(os.path.basename(file_name))[0]
+        else:
+            inv_num = "N/A"
 
-	# 2. Vendor / Seller
-	vendor = find_str(
-		"vendor_name", "vendor", "seller", "seller_name",
-		"company", "company_name", "merchant", "biller",
-		"from", "issuer", "store", "store_name", default="Unknown Vendor"
-	)
+    vendor = find_str(
+        "vendor_name", "vendor", "seller", "seller_name", "lieferant",
+        "company", "company_name", "merchant", "issuer", default="Unknown Vendor"
+    )
+    vendor_addr = find_str("vendor_address", "seller_address", "company_address", "lieferantenanschrift", default="")
+    vat_id = find_str("vat_id", "vendor_vat_id", "ust_idnr", "ust_id", "vat_number", default="")
+    if vat_id:
+        vat_id = re.sub(r"\s+", "", vat_id).upper()
+    tax_number = find_str("tax_number", "vendor_tax_number", "steuernummer", "steuer_nr", default="")
+    vendor_iban = find_str("vendor_iban", "iban", "bank_iban", default="")
+    vendor_bic = find_str("vendor_bic", "bic", "swift", default="")
 
-	# 3. Buyer / Customer
-	buyer = find_str(
-		"buyer_name", "buyer", "customer", "customer_name",
-		"client", "client_name", "bill_to", "recipient", default="N/A"
-	)
+    buyer = find_str(
+        "buyer_name", "buyer", "customer", "customer_name", "rechnungsempfaenger",
+        "client", "client_name", "bill_to", "recipient", default="N/A"
+    )
+    buyer_addr = find_str("buyer_address", "customer_address", "client_address", "shipping_address", default="")
+    buyer_vat_id = find_str("buyer_vat_id", "customer_vat_id", default="")
+    leitweg_id = find_str("leitweg_id", "buyer_reference", "bt_10", default="")
 
-	# 4. Dates
-	inv_date = find_str(
-		"invoice_date", "date", "issue_date", "billing_date",
-		"created_date", "inv_date", "order_date", default="N/A"
-	)
-	due_date = find_str(
-		"due_date", "payment_due", "payment_due_date", "expiry_date", default=""
-	)
+    doc_type = find_str("document_type", "type", "belegart", default="invoice").lower()
+    if "gutschrift" in doc_type or "credit" in doc_type or str(inv_num).upper().startswith("GS-"):
+        doc_type = "credit_note"
+    else:
+        doc_type = "invoice"
 
-	# 5. Addresses
-	vendor_addr = find_str("vendor_address", "seller_address", "company_address", default="")
-	buyer_addr = find_str("buyer_address", "customer_address", "client_address", "shipping_address", default="")
+    raw_inv_date = find_str("invoice_date", "date", "issue_date", "rechnungsdatum", "datum", default="")
+    inv_date = parse_german_date(raw_inv_date) or (raw_inv_date if raw_inv_date else "N/A")
 
-	# 6. Line Items
-	line_items = (
-		raw_data.get("line_items") or
-		raw_data.get("items") or
-		fields.get("line_items") or
-		fields.get("items") or
-		[]
-	)
-	if isinstance(line_items, dict):
-		line_items = [line_items]
-	elif not isinstance(line_items, list):
-		line_items = []
+    raw_deliv_date = find_str("delivery_date", "leistungsdatum", "lieferdatum", "service_date", default="")
+    delivery_date = parse_german_date(raw_deliv_date) or raw_deliv_date
 
-	# 7. Financial amounts
-	subtotal = find_float("subtotal", "sub_total", "amount_before_tax", "net_amount", default=0.0)
-	tax = find_float("tax", "vat", "gst", "tax_amount", "total_tax", default=0.0)
-	discount = find_float("discount", "discount_amount", "rebate", default=0.0)
-	total = find_float(
-		"total_amount", "grand_total", "total", "amount_due",
-		"final_total", "net_total", "balance_due", "total_due", "amount", default=0.0
-	)
+    raw_due_date = find_str("due_date", "payment_due", "payment_due_date", "faelligkeitsdatum", "zahlbar_bis", default="")
+    due_date = parse_german_date(raw_due_date) or raw_due_date
 
-	# Fallback: if total is still 0.0, attempt to sum line items
-	if total == 0.0 and line_items:
-		items_sum = 0.0
-		for it in line_items:
-			if isinstance(it, dict):
-				it_total = parse_numeric(it.get("total") or it.get("total_amount") or it.get("amount") or 0.0)
-				if it_total > 0:
-					items_sum += it_total
-				else:
-					qty = parse_numeric(it.get("quantity") or it.get("qty") or 1.0)
-					price = parse_numeric(it.get("unit_price") or it.get("price") or 0.0)
-					items_sum += qty * price
-		if items_sum > 0:
-			total = round(items_sum, 2)
+    payment_terms = find_str("payment_terms", "zahlungsbedingungen", "zahlungsziel", default="")
+    skonto_terms = find_str("skonto_terms", "skonto", default="")
+    skonto_percent = find_float("skonto_percent", default=0.0)
+    skonto_days = int(parse_numeric(raw_data.get("skonto_days") or fields.get("skonto_days"), 0.0))
+    raw_skonto_dl = find_str("skonto_deadline", default="")
+    skonto_deadline = parse_german_date(raw_skonto_dl) or raw_skonto_dl
+    skonto_amount = find_float("skonto_amount", default=0.0)
 
-	# Never fabricate a subtotal from the grand total: a missed extraction must
-	# stay 0.0 (reported downstream as "not extracted") instead of silently
-	# copying the grand total, which caused before-tax/total swaps in answers.
-	# Honest derivation only: sum the line-item totals when the document did
-	# not state a subtotal explicitly.
-	if subtotal == 0.0 and line_items:
-		derived = 0.0
-		for it in line_items:
-			if isinstance(it, dict):
-				it_total = parse_numeric(it.get("total") or it.get("total_amount") or it.get("amount") or 0.0)
-				if it_total > 0:
-					derived += it_total
-				else:
-					qty = parse_numeric(it.get("quantity") or it.get("qty") or 1.0)
-					price = parse_numeric(it.get("unit_price") or it.get("price") or 0.0)
-					derived += qty * price
-		if derived > 0:
-			subtotal = round(derived, 2)
+    raw_items = (
+        raw_data.get("line_items")
+        if raw_data.get("line_items") is not None
+        else (raw_data.get("items") if raw_data.get("items") is not None else (fields.get("line_items") or fields.get("items") or []))
+    )
+    if isinstance(raw_items, str):
+        try:
+            raw_items = json.loads(raw_items)
+        except Exception:
+            raw_items = []
+    if isinstance(raw_items, dict):
+        raw_items = [raw_items]
+    elif not isinstance(raw_items, list):
+        raw_items = []
 
-	currency = find_str("currency", "currency_code", "currency_symbol", default="INR")
-	payment_status = find_str("payment_status", "status", default="Unpaid")
+    normalized_items = []
+    for idx, it in enumerate(raw_items, start=1):
+        if not isinstance(it, dict):
+            continue
+        pos = str(it.get("pos") or it.get("position") or idx)
+        art_no = str(it.get("article_number") or it.get("art_nr") or it.get("sku") or it.get("code") or "").strip()
+        desc = str(
+            it.get("description") or it.get("name") or it.get("bezeichnung")
+            or it.get("desc") or it.get("item") or it.get("item_name") or it.get("product") or ""
+        ).strip()
+        qty = parse_numeric(it.get("quantity") if it.get("quantity") is not None else it.get("qty"), 0.0)
+        unit = str(it.get("unit") or it.get("me") or it.get("uom") or "Stk").strip()
+        unit_price = parse_numeric(
+            it.get("unit_price") if it.get("unit_price") is not None
+            else (it.get("rate") if it.get("rate") is not None else it.get("price")),
+            0.0,
+        )
+        price_unit = parse_numeric(it.get("price_unit") if it.get("price_unit") is not None else it.get("pe"), 1.0)
+        if price_unit <= 0:
+            price_unit = 1.0
+        disc_pct = parse_numeric(
+            it.get("discount_percent") if it.get("discount_percent") is not None
+            else (it.get("discount") if it.get("discount") is not None else it.get("rabatt")),
+            0.0,
+        )
+        line_total = parse_numeric(
+            it.get("line_total") if it.get("line_total") is not None
+            else (it.get("total") if it.get("total") is not None else it.get("amount")),
+            0.0,
+        )
+        vat_rate = parse_numeric(
+            it.get("vat_rate") if it.get("vat_rate") is not None
+            else (it.get("tax_rate") if it.get("tax_rate") is not None else it.get("ust")),
+            19.0,
+        )
+        normalized_items.append({
+            "pos": pos,
+            "article_number": art_no,
+            "description": desc,
+            "name": desc,
+            "quantity": qty,
+            "qty": qty,
+            "unit": unit,
+            "unit_price": unit_price,
+            "rate": unit_price,
+            "price_unit": price_unit,
+            "discount_percent": disc_pct,
+            "discount": disc_pct,
+            "line_total": line_total,
+            "total": line_total,
+            "vat_rate": vat_rate,
+        })
 
-	return {
-		"invoice_number": inv_num,
-		"vendor_name": vendor,
-		"vendor_address": vendor_addr,
-		"buyer_name": buyer,
-		"buyer_address": buyer_addr,
-		"invoice_date": inv_date,
-		"due_date": due_date,
-		"total_amount": total,
-		"subtotal": subtotal,
-		"tax": tax,
-		"discount": discount,
-		"currency": currency,
-		"payment_status": payment_status,
-		"line_items": line_items,
-		"items": line_items,
-	}
+    raw_vat_bd = raw_data.get("vat_breakdown") or fields.get("vat_breakdown") or []
+    if isinstance(raw_vat_bd, str):
+        try:
+            raw_vat_bd = json.loads(raw_vat_bd)
+        except Exception:
+            raw_vat_bd = []
+    vat_breakdown = []
+    if isinstance(raw_vat_bd, list):
+        for vb in raw_vat_bd:
+            if isinstance(vb, dict) and vb.get("rate") is not None:
+                vat_breakdown.append({
+                    "rate": parse_numeric(vb.get("rate"), 19.0),
+                    "net": parse_numeric(vb.get("net"), 0.0),
+                    "vat": parse_numeric(vb.get("vat"), 0.0),
+                })
 
+    subtotal = find_float("subtotal", "sub_total", "amount_before_tax", "net_amount", "nettobetrag", default=0.0)
+    tax_amount = find_float("tax_amount", "tax", "vat", "gst", "total_tax", "ust_betrag", default=0.0)
+    discount = find_float("discount", "discount_amount", "rebate", default=0.0)
+    total = find_float(
+        "total_amount", "grand_total", "total", "amount_due",
+        "final_total", "rechnungsbetrag", "gesamtbetrag", default=0.0
+    )
 
-# -------------------------------------------------------------
-# 3. Extracting Invoices & Data Normalization
-# -------------------------------------------------------------
-def _sqlite_created_at_map(user_id: Optional[str]) -> Dict[str, str]:
-	"""Map file_name -> created_at for one user's invoices via raw sqlite3.
+    # Guardrail: Never fabricate a subtotal from total_amount.
+    # If subtotal is missing (0.0), derive it from line items, else store 0.0.
+    if subtotal == 0.0 and normalized_items:
+        derived_sub = sum(parse_numeric(it.get("line_total"), 0.0) for it in normalized_items)
+        if derived_sub != 0.0:
+            subtotal = round(derived_sub, 2)
 
-	Fallback source for the upload timestamp of records indexed before
-	``uploaded_at`` was recorded in ChromaDB metadata. The SQLite
-	``created_at`` column defaults to the ingestion moment and is never
-	updated by re-uploads (the upsert only refreshes content columns), so
-	it preserves the original upload order.
-	"""
-	result: Dict[str, str] = {}
-	try:
-		if not user_id:
-			return result
-		import sqlite3
-		from config import CHAT_DB_PATH
-		conn = sqlite3.connect(CHAT_DB_PATH)
-		try:
-			cur = conn.cursor()
-			u_clean = str(user_id).replace("-", "")
-			cur.execute(
-				"SELECT file_name, created_at FROM invoices WHERE user_id = ?",
-				(u_clean,),
-			)
-			for file_name, created_at in cur.fetchall():
-				if file_name:
-					result[str(file_name)] = str(created_at) if created_at else ""
-		finally:
-			conn.close()
-	except Exception as exc:
-		logger.warning("Could not read invoice created_at map: %s", exc)
-	return result
+    if tax_amount == 0.0 and vat_breakdown:
+        derived_tax = sum(parse_numeric(vb.get("vat"), 0.0) for vb in vat_breakdown)
+        if derived_tax != 0.0:
+            tax_amount = round(derived_tax, 2)
 
+    if total == 0.0 and subtotal != 0.0:
+        total = round(subtotal + tax_amount, 2)
 
-def get_all_invoices(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-	"""
-	Retrieve all invoice records stored in ChromaDB as a list of normalized dicts.
-	Handles both top-level and nested 'fields' structures gracefully.
-	Optionally filters by user_id for strict user isolation.
-	"""
-	user_id = _resolve_user_id(user_id)
-	col = index if hasattr(index, "get") else get_collection(path=index_path)
-	where_filter = {"user_id": str(user_id)} if user_id else None
-	try:
-		data = col.get(where=where_filter) if where_filter else col.get()
-	except Exception as exc:
-		logger.warning("Failed to fetch with where filter %s, falling back to all: %s", where_filter, exc)
-		try:
-			data = col.get()
-		except Exception as inner_exc:
-			logger.error("Failed to fetch documents from ChromaDB collection: %s", inner_exc)
-			return []
+    currency = find_str("currency", "currency_code", "currency_symbol", default="EUR").upper()
+    if currency in ("€", "EURO"):
+        currency = "EUR"
+    payment_status = find_str("payment_status", "status", default="Unpaid")
 
-	ids = data.get("ids") or []
-	docs = data.get("documents") or []
-	metadatas = data.get("metadatas") or []
-
-	invoices = []
-	created_at_map = _sqlite_created_at_map(user_id)
-	for doc_id, doc_text, meta in zip(ids, docs, metadatas):
-		meta = meta or {}
-		# Enforce user filtering in memory as well (strict: docs without a
-		# matching user_id are excluded whenever a user scope is active)
-		if user_id:
-			doc_user = meta.get("user_id")
-			if not doc_user or str(doc_user) != str(user_id):
-				continue
-
-		try:
-			parsed = json.loads(doc_text) if doc_text else {}
-			if not isinstance(parsed, dict):
-				parsed = {}
-		except Exception:
-			parsed = {}
-
-		# Merge metadata into parsed dict
-		for k, v in meta.items():
-			parsed.setdefault(k, v)
-
-		file_name = meta.get("file_name") or parsed.get("file_name", "")
-		normalized = normalize_invoice_data(parsed, file_name=file_name)
-
-		# Preserve all original parsed keys, overlaid with normalized values
-		res_dict = {**parsed, **normalized}
-		res_dict["_doc_id"] = doc_id
-		res_dict["file_name"] = file_name
-
-		# Upload timestamp: the explicit value recorded at ingestion, else the
-		# SQLite row's created_at for records indexed before uploaded_at
-		# existed, else "" (sorted last).
-		uploaded_at = str(meta.get("uploaded_at") or parsed.get("uploaded_at") or "").strip()
-		if not uploaded_at:
-			uploaded_at = created_at_map.get(file_name, "")
-		res_dict["uploaded_at"] = uploaded_at
-
-		invoices.append(res_dict)
-
-	return invoices
+    return {
+        "invoice_number": inv_num,
+        "vendor_name": vendor,
+        "vendor_address": vendor_addr,
+        "vat_id": vat_id,
+        "tax_number": tax_number,
+        "vendor_iban": vendor_iban,
+        "vendor_bic": vendor_bic,
+        "buyer_name": buyer,
+        "buyer_address": buyer_addr,
+        "buyer_vat_id": buyer_vat_id,
+        "leitweg_id": leitweg_id,
+        "document_type": doc_type,
+        "invoice_date": inv_date,
+        "delivery_date": delivery_date,
+        "due_date": due_date,
+        "payment_terms": payment_terms,
+        "skonto_terms": skonto_terms,
+        "skonto_percent": skonto_percent,
+        "skonto_days": skonto_days,
+        "skonto_deadline": skonto_deadline,
+        "skonto_amount": skonto_amount,
+        "total_amount": total,
+        "subtotal": subtotal,
+        "tax": tax_amount,
+        "tax_amount": tax_amount,
+        "discount": discount,
+        "currency": currency,
+        "payment_status": payment_status,
+        "line_items": normalized_items,
+        "items": normalized_items,
+        "vat_breakdown": vat_breakdown,
+    }
 
 
-def get_all_invoices_with_ids(index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-	"""Retrieve all invoice records along with their ChromaDB node IDs, optionally filtered by user_id."""
-	return get_all_invoices(index_path=index_path, user_id=user_id)
+def _build_item_descriptions_text(line_items: List[dict]) -> str:
+    parts = []
+    for it in line_items or []:
+        if isinstance(it, dict):
+            art = str(it.get("article_number") or "").strip()
+            desc = str(it.get("description") or it.get("name") or "").strip()
+            if art:
+                parts.append(art)
+            if desc:
+                parts.append(desc)
+    return " | ".join(parts)
 
 
-def get_all_invoices_df(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> pd.DataFrame:
-	"""
-	Convert stored ChromaDB invoices into a clean pandas DataFrame with standardized columns.
-	"""
-	invoices = get_all_invoices(index=index, index_path=index_path, user_id=user_id)
-	if not invoices:
-		return pd.DataFrame(columns=[
-			"invoice_number", "vendor_name", "buyer_name",
-			"invoice_date", "total_amount", "subtotal", "tax", "discount",
-			"currency", "payment_status", "uploaded_at"
-		])
-
-	records = []
-	for inv in invoices:
-		norm = normalize_invoice_data(inv, file_name=inv.get("file_name", ""))
-		inv_num = norm["invoice_number"]
-		vendor = norm["vendor_name"]
-		buyer = norm["buyer_name"]
-		date = norm["invoice_date"]
-		amount = norm["total_amount"]
-		currency = norm["currency"]
-		status = norm["payment_status"]
-
-		records.append({
-			"invoice_number": str(inv_num).strip(),
-			"vendor_name": str(vendor).strip(),
-			"buyer_name": str(buyer).strip(),
-			"invoice_date": str(date).strip(),
-			"total_amount": float(amount),
-			"subtotal": float(norm.get("subtotal") or 0.0),
-			"tax": float(norm.get("tax") or 0.0),
-			"discount": float(norm.get("discount") or 0.0),
-			"currency": str(currency).strip(),
-			"payment_status": str(status).strip(),
-			"uploaded_at": str(inv.get("uploaded_at") or "").strip(),
-		})
-
-	return pd.DataFrame(records)
+def _sync_fts_row(
+    conn: sqlite3.Connection,
+    doc_id: str,
+    user_id: str,
+    vendor_name: str,
+    invoice_number: str,
+    line_items: List[dict],
+) -> None:
+    item_text = _build_item_descriptions_text(line_items)
+    conn.execute("DELETE FROM invoices_fts WHERE doc_id = ?", (doc_id,))
+    conn.execute(
+        """
+        INSERT INTO invoices_fts (doc_id, user_id, vendor_name, invoice_number, item_descriptions)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (doc_id, user_id, vendor_name or "", invoice_number or "", item_text),
+    )
 
 
-def get_all_invoices_matrix(index=None, index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> str:
-	"""
-	Build a single unified Markdown Summary Matrix table across the current user's invoices.
-	Used by QA Agent, Graph Agent, and Report Generator to perform rapid exact math.
-	Scoped to user_id (explicit or context) so one user never sees another's data.
-	"""
-	df = get_all_invoices_df(index=index, index_path=index_path, user_id=_resolve_user_id(user_id))
-	if df.empty:
-		return "No invoices found in storage."
-	return df.to_markdown(index=False)
+def _normalize_iban(iban: str) -> str:
+    return re.sub(r"\s+", "", str(iban or "")).upper()
 
 
-# -------------------------------------------------------------
-# 4. Semantic Similarity Search
-# -------------------------------------------------------------
-def semantic_search_nodes(
-	query: str,
-	top_k: int = 5,
-	index=None,
-	index_path: str = DEFAULT_CHROMA_PATH,
-	user_id: Optional[str] = None
-) -> List[ChromaNode]:
-	"""
-	Perform semantic similarity search on ChromaDB and return retrieved node objects.
-	Scoped to the effective user (explicit arg or context) when one is set.
-	"""
-	col = index if hasattr(index, "query") else get_collection(path=index_path)
-	count = col.count()
-	if count == 0:
-		return []
+def _check_and_sync_vendor_iban(
+    conn: sqlite3.Connection,
+    user_id: str,
+    norm: dict,
+    vies_status: str = "unchecked",
+    vies_checked_at: str = "",
+) -> tuple[int, str]:
+    vendor_name = str(norm.get("vendor_name") or "").strip()
+    if not vendor_name or vendor_name.lower() in ("unknown vendor", "unknown", "n/a"):
+        return 0, ""
 
-	effective_user = _resolve_user_id(user_id)
-	where_filter = {"user_id": effective_user} if effective_user else None
-	# Over-fetch when filtering so the scoped result set can still fill top_k
-	n_results = max(1, min(top_k * 4 if where_filter else top_k, count))
-	try:
-		res = col.query(query_texts=[query], n_results=n_results, where=where_filter) if where_filter else col.query(query_texts=[query], n_results=n_results)
-	except Exception as exc:
-		logger.error("ChromaDB query error for '%s': %s", query, exc)
-		return []
+    new_iban_raw = str(norm.get("vendor_iban") or "").strip()
+    new_iban_clean = _normalize_iban(new_iban_raw)
+    now = datetime.now(timezone.utc).isoformat()
 
-	ids_list = (res.get("ids") or [[]])[0]
-	docs_list = (res.get("documents") or [[]])[0]
-	metas_list = (res.get("metadatas") or [[]])[0]
+    u_variants = _user_id_variants(user_id)
+    if not u_variants:
+        u_variants = [str(user_id)]
 
-	nodes = []
-	for doc_id, doc_text, meta in zip(ids_list, docs_list, metas_list):
-		meta = meta or {}
-		if effective_user:
-			doc_user = meta.get("user_id")
-			if not doc_user or str(doc_user) != effective_user:
-				continue
-		nodes.append(ChromaNode(text=doc_text, metadata=meta, id=doc_id))
-		if len(nodes) >= top_k:
-			break
+    placeholders = ",".join("?" for _ in u_variants)
+    row = conn.execute(
+        f"SELECT * FROM vendors WHERE user_id IN ({placeholders}) AND lower(vendor_name) = lower(?)",
+        [*u_variants, vendor_name],
+    ).fetchone()
 
-	return nodes
+    if not row:
+        conn.execute(
+            """
+            INSERT INTO vendors (
+                user_id, vendor_name, address, vat_id, tax_number,
+                iban, bic, payment_terms, vies_status, vies_checked_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                u_variants[0],
+                vendor_name,
+                str(norm.get("vendor_address") or ""),
+                str(norm.get("vat_id") or ""),
+                str(norm.get("tax_number") or ""),
+                new_iban_raw,
+                str(norm.get("vendor_bic") or ""),
+                str(norm.get("payment_terms") or ""),
+                vies_status,
+                vies_checked_at,
+                now,
+            ),
+        )
+        return 0, ""
+
+    stored_iban_raw = str(row["iban"] or "").strip()
+    stored_iban_clean = _normalize_iban(stored_iban_raw)
+
+    iban_change_flag = 0
+    previous_iban = ""
+
+    if stored_iban_clean and new_iban_clean and stored_iban_clean != new_iban_clean:
+        iban_change_flag = 1
+        previous_iban = stored_iban_raw
+    elif new_iban_raw and not stored_iban_clean:
+        conn.execute(
+            "UPDATE vendors SET iban = ?, bic = ?, updated_at = ? WHERE id = ?",
+            (new_iban_raw, str(norm.get("vendor_bic") or row["bic"] or ""), now, row["id"]),
+        )
+
+    conn.execute(
+        """
+        UPDATE vendors SET
+            address = CASE WHEN ? != '' THEN ? ELSE address END,
+            vat_id = CASE WHEN ? != '' THEN ? ELSE vat_id END,
+            tax_number = CASE WHEN ? != '' THEN ? ELSE tax_number END,
+            payment_terms = CASE WHEN ? != '' THEN ? ELSE payment_terms END,
+            vies_status = CASE WHEN ? != 'unchecked' THEN ? ELSE vies_status END,
+            vies_checked_at = CASE WHEN ? != '' THEN ? ELSE vies_checked_at END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            str(norm.get("vendor_address") or ""), str(norm.get("vendor_address") or ""),
+            str(norm.get("vat_id") or ""), str(norm.get("vat_id") or ""),
+            str(norm.get("tax_number") or ""), str(norm.get("tax_number") or ""),
+            str(norm.get("payment_terms") or ""), str(norm.get("payment_terms") or ""),
+            vies_status, vies_status,
+            vies_checked_at, vies_checked_at,
+            now,
+            row["id"],
+        ),
+    )
+    return iban_change_flag, previous_iban
 
 
-def semantic_search_text(
-	query: str,
-	top_k: int = 5,
-	index=None,
-	index_path: str = DEFAULT_CHROMA_PATH,
-	user_id: Optional[str] = None
+def _check_duplicate_invoice(
+    conn: sqlite3.Connection,
+    user_id: str,
+    norm: dict,
+    file_name: str,
+) -> tuple[int, str]:
+    vendor_name = str(norm.get("vendor_name") or "").strip()
+    total_amount = float(norm.get("total_amount") or 0.0)
+    inv_date_str = str(norm.get("invoice_date") or "").strip()
+
+    if not vendor_name or total_amount == 0.0:
+        return 0, ""
+
+    u_variants = _user_id_variants(user_id)
+    if not u_variants:
+        return 0, ""
+
+    placeholders = ",".join("?" for _ in u_variants)
+    rows = conn.execute(
+        f"""
+        SELECT invoice_number, file_name, invoice_date, total_amount
+        FROM invoices
+        WHERE user_id IN ({placeholders})
+          AND lower(vendor_name) = lower(?)
+          AND ABS(total_amount - ?) < 0.01
+        """,
+        [*u_variants, vendor_name, total_amount],
+    ).fetchall()
+
+    try:
+        target_dt = datetime.strptime(inv_date_str, "%Y-%m-%d").date() if re.match(r"^\d{4}-\d{2}-\d{2}$", inv_date_str) else None
+    except Exception:
+        target_dt = None
+
+    for r in rows:
+        other_file = str(r["file_name"] or "")
+        other_num = str(r["invoice_number"] or "")
+        if other_file == file_name:
+            continue
+        other_date_str = str(r["invoice_date"] or "")
+        if target_dt and re.match(r"^\d{4}-\d{2}-\d{2}$", other_date_str):
+            try:
+                other_dt = datetime.strptime(other_date_str, "%Y-%m-%d").date()
+                if abs((target_dt - other_dt).days) <= 7:
+                    return 1, other_num or other_file
+            except Exception:
+                pass
+        elif other_date_str == inv_date_str:
+            return 1, other_num or other_file
+
+    return 0, ""
+
+
+def _row_to_invoice_dict(row: Dict[str, Any], include_ids: bool = True) -> Dict[str, Any]:
+    items = []
+    raw_items = row.get("items")
+    if raw_items:
+        try:
+            items = json.loads(raw_items) if isinstance(raw_items, str) else raw_items
+        except Exception:
+            items = []
+
+    vat_breakdown = []
+    raw_vb = row.get("vat_breakdown")
+    if raw_vb:
+        try:
+            vat_breakdown = json.loads(raw_vb) if isinstance(raw_vb, str) else raw_vb
+        except Exception:
+            vat_breakdown = []
+
+    validation_report = {}
+    raw_vr = row.get("validation_report")
+    if raw_vr:
+        try:
+            validation_report = json.loads(raw_vr) if isinstance(raw_vr, str) else raw_vr
+        except Exception:
+            validation_report = {}
+
+    inv_num = row.get("invoice_number") or "N/A"
+    uid = str(row.get("user_id") or "")
+    doc_id = row.get("doc_id")
+    if not doc_id:
+        clean_fb = str(inv_num or row.get("id")).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+        doc_id = f"inv_{uid}_{clean_fb}"
+
+    tax_val = float(row.get("tax_amount") if row.get("tax_amount") is not None else (row.get("tax") or 0.0))
+    subtotal_val = float(row.get("subtotal") or 0.0)
+
+    res = {
+        "id": row.get("id"),
+        "doc_id": doc_id,
+        "file_name": row.get("file_name") or "",
+        "vendor_name": row.get("vendor_name") or "Unknown Vendor",
+        "vendor_address": row.get("vendor_address") or "",
+        "vat_id": row.get("vat_id") or "",
+        "tax_number": row.get("tax_number") or "",
+        "vendor_iban": row.get("vendor_iban") or "",
+        "vendor_bic": row.get("vendor_bic") or "",
+        "buyer_name": row.get("buyer_name") or "N/A",
+        "buyer_address": row.get("buyer_address") or "",
+        "buyer_vat_id": row.get("buyer_vat_id") or "",
+        "leitweg_id": row.get("leitweg_id") or "",
+        "invoice_number": inv_num,
+        "document_type": row.get("document_type") or "invoice",
+        "invoice_date": row.get("invoice_date") or "N/A",
+        "delivery_date": row.get("delivery_date") or "",
+        "due_date": row.get("due_date") or "",
+        "payment_terms": row.get("payment_terms") or "",
+        "skonto_terms": row.get("skonto_terms") or "",
+        "skonto_percent": float(row.get("skonto_percent") or 0.0),
+        "skonto_days": int(row.get("skonto_days") or 0),
+        "skonto_deadline": row.get("skonto_deadline") or "",
+        "skonto_amount": float(row.get("skonto_amount") or 0.0),
+        "items": items,
+        "line_items": items,
+        "vat_breakdown": vat_breakdown,
+        "subtotal": subtotal_val,
+        "tax": tax_val,
+        "tax_amount": tax_val,
+        "discount": float(row.get("discount") or 0.0),
+        "total_amount": float(row.get("total_amount") or 0.0),
+        "currency": row.get("currency") or "EUR",
+        "payment_status": row.get("payment_status") or "Unpaid",
+        "validation_report": validation_report,
+        "validation_status": row.get("validation_status") or "PENDING",
+        "vies_status": row.get("vies_status") or "unchecked",
+        "vies_checked_at": row.get("vies_checked_at") or "",
+        "vies_details": row.get("vies_details") or "",
+        "iban_change_flag": int(row.get("iban_change_flag") or 0),
+        "previous_iban": row.get("previous_iban") or "",
+        "duplicate_flag": int(row.get("duplicate_flag") or 0),
+        "duplicate_of": row.get("duplicate_of") or "",
+        "datev_booked": int(row.get("datev_booked") or 0),
+        "datev_account": row.get("datev_account") or "",
+        "payment_run_id": row.get("payment_run_id") or "",
+        "uploaded_at": str(row.get("uploaded_at") or row.get("created_at") or ""),
+        "created_at": str(row.get("created_at") or ""),
+    }
+    if include_ids:
+        res["_doc_id"] = doc_id
+    return res
+
+
+def get_all_invoices(
+    index=None,
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
+    include_ids: bool = True,
+) -> List[Dict[str, Any]]:
+    init_db(CHAT_DB_PATH)
+    u_variants = _user_id_variants(user_id)
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        if u_variants:
+            placeholders = ",".join("?" for _ in u_variants)
+            rows = conn.execute(
+                f"SELECT * FROM invoices WHERE user_id IN ({placeholders}) ORDER BY id DESC",
+                u_variants,
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM invoices ORDER BY id DESC").fetchall()
+        return [_row_to_invoice_dict(dict(r), include_ids=include_ids) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_all_invoices_with_ids(
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    return get_all_invoices(index_path=index_path, user_id=user_id, include_ids=True)
+
+
+def get_invoice_by_identifier(identifier: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    init_db(CHAT_DB_PATH)
+    if not identifier:
+        return None
+    ident = str(identifier).strip()
+    u_variants = _user_id_variants(user_id)
+
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        user_clause = ""
+        params: List[Any] = []
+        if u_variants:
+            placeholders = ",".join("?" for _ in u_variants)
+            user_clause = f"AND user_id IN ({placeholders})"
+            params.extend(u_variants)
+
+        clean_ident = ident
+        if clean_ident.startswith("inv_"):
+            parts = clean_ident.split("_", 2)
+            if len(parts) == 3:
+                clean_ident = parts[2]
+
+        sql = f"""
+            SELECT * FROM invoices
+            WHERE (
+                doc_id = ?
+                OR invoice_number = ?
+                OR file_name = ?
+                OR replace(invoice_number, '/', '_') = ?
+                OR CAST(id AS TEXT) = ?
+            )
+            {user_clause}
+            ORDER BY id DESC
+            LIMIT 1
+        """
+        row = conn.execute(sql, [ident, ident, ident, clean_ident, ident, *params]).fetchone()
+        return _row_to_invoice_dict(dict(row), include_ids=True) if row else None
+    finally:
+        conn.close()
+
+
+def get_all_invoices_df(
+    index=None,
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
+) -> pd.DataFrame:
+    invoices = get_all_invoices(index=index, index_path=index_path, user_id=user_id)
+    cols = [
+        "invoice_number", "vendor_name", "buyer_name", "vat_id",
+        "invoice_date", "due_date", "total_amount", "subtotal", "tax_amount", "tax",
+        "discount", "currency", "payment_status", "validation_status", "uploaded_at"
+    ]
+    if not invoices:
+        return pd.DataFrame(columns=cols)
+
+    records = []
+    for inv in invoices:
+        records.append({
+            "invoice_number": str(inv.get("invoice_number") or "").strip(),
+            "vendor_name": str(inv.get("vendor_name") or "").strip(),
+            "buyer_name": str(inv.get("buyer_name") or "").strip(),
+            "vat_id": str(inv.get("vat_id") or "").strip(),
+            "invoice_date": str(inv.get("invoice_date") or "").strip(),
+            "due_date": str(inv.get("due_date") or "").strip(),
+            "total_amount": float(inv.get("total_amount") or 0.0),
+            "subtotal": float(inv.get("subtotal") or 0.0),
+            "tax_amount": float(inv.get("tax_amount") or 0.0),
+            "tax": float(inv.get("tax_amount") or 0.0),
+            "discount": float(inv.get("discount") or 0.0),
+            "currency": str(inv.get("currency") or "EUR").strip(),
+            "payment_status": str(inv.get("payment_status") or "Unpaid").strip(),
+            "validation_status": str(inv.get("validation_status") or "PENDING").strip(),
+            "uploaded_at": str(inv.get("uploaded_at") or "").strip(),
+        })
+    return pd.DataFrame(records)
+
+
+def get_all_invoices_matrix(
+    index=None,
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
 ) -> str:
-	"""
-	Perform semantic similarity search on ChromaDB and return formatted text snippets.
-	"""
-	nodes = semantic_search_nodes(query=query, top_k=top_k, index=index, index_path=index_path, user_id=user_id)
-	if not nodes:
-		return ""
-
-	chunks = []
-	for n in nodes:
-		file_name = n.metadata.get("file_name", "Invoice Document")
-		chunks.append(f"Source: {file_name}\n{n.get_content()}")
-
-	return "\n\n---\n\n".join(chunks)
+    df = get_all_invoices_df(index=index, index_path=index_path, user_id=_resolve_user_id(user_id))
+    if df.empty:
+        return "No invoices found in storage."
+    return df.to_markdown(index=False)
 
 
-# -------------------------------------------------------------
-# 5. Storage & Persistence Modifications
-# -------------------------------------------------------------
+def search_invoices_fts(
+    query: str,
+    user_id: Optional[str] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    init_db(CHAT_DB_PATH)
+    q = str(query or "").strip()
+    if not q:
+        return get_all_invoices(user_id=user_id)[:limit]
+
+    u_variants = _user_id_variants(user_id)
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        tokens = [
+            t for t in re.findall(r"[\wÄÖÜäöüß-]+", q, flags=re.UNICODE)
+            if len(t) >= 2 and t.lower() not in (
+                "der", "die", "das", "und", "oder", "von", "für", "mit", "bei", "wie", "was",
+                "the", "and", "for", "from", "with", "show", "find", "list", "all", "invoices",
+                "rechnung", "rechnungen", "invoice"
+            )
+        ]
+        matched_rows = []
+        if tokens:
+            fts_expr = " OR ".join(f'"{t.replace(chr(34), "")}"*' for t in tokens)
+            if u_variants:
+                placeholders = ",".join("?" for _ in u_variants)
+                sql = f"""
+                    SELECT i.*, bm25(invoices_fts) AS rank
+                    FROM invoices_fts
+                    JOIN invoices i ON invoices_fts.doc_id = i.doc_id
+                    WHERE i.user_id IN ({placeholders})
+                      AND invoices_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                matched_rows = conn.execute(sql, [*u_variants, fts_expr, limit]).fetchall()
+            else:
+                sql = """
+                    SELECT i.*, bm25(invoices_fts) AS rank
+                    FROM invoices_fts
+                    JOIN invoices i ON invoices_fts.doc_id = i.doc_id
+                    WHERE invoices_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                matched_rows = conn.execute(sql, [fts_expr, limit]).fetchall()
+
+        if not matched_rows and tokens:
+            like_clauses = []
+            like_params = []
+            for t in tokens:
+                like_clauses.append("(lower(vendor_name) LIKE ? OR lower(invoice_number) LIKE ? OR lower(items) LIKE ?)")
+                pat = f"%{t.lower()}%"
+                like_params.extend([pat, pat, pat])
+            where_like = " OR ".join(like_clauses)
+            if u_variants:
+                placeholders = ",".join("?" for _ in u_variants)
+                sql = f"SELECT * FROM invoices WHERE user_id IN ({placeholders}) AND ({where_like}) ORDER BY id DESC LIMIT ?"
+                matched_rows = conn.execute(sql, [*u_variants, *like_params, limit]).fetchall()
+            else:
+                sql = f"SELECT * FROM invoices WHERE ({where_like}) ORDER BY id DESC LIMIT ?"
+                matched_rows = conn.execute(sql, [*like_params, limit]).fetchall()
+
+        return [_row_to_invoice_dict(dict(r), include_ids=True) for r in matched_rows]
+    except Exception as exc:
+        logger.warning("FTS5 search fallback triggered for '%s': %s", q, exc)
+        return []
+    finally:
+        conn.close()
+
+
 def save_invoice_to_vector_store(
-	structured_json: dict,
-	file_path: str,
-	index_path: str = DEFAULT_CHROMA_PATH,
-	user_id: Optional[str] = None,
-):
-	"""
-	Package structured invoice JSON into ChromaDB with metadata and persist to disk.
-	Associates with user_id for strict multi-user tenancy and synchronizes with SQLite invoices table.
-	"""
-	col = get_collection(path=index_path)
+    structured_json: dict,
+    file_path: str,
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    init_db(CHAT_DB_PATH)
+    user_id_str = _resolve_user_id(user_id) or "default_user"
+    u_clean = str(user_id_str).replace("-", "")
 
-	file_name = os.path.basename(file_path)
-	norm = normalize_invoice_data(structured_json, file_name=file_name)
+    file_name = os.path.basename(file_path) if file_path else "invoice.pdf"
+    norm = normalize_invoice_data(structured_json, file_name=file_name)
 
-	# Ingestion moment, recorded once and never updated: the source of truth
-	# for "last uploaded / most recent" questions.
-	uploaded_at = datetime.now(timezone.utc).isoformat()
-	norm["uploaded_at"] = uploaded_at
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    norm["uploaded_at"] = uploaded_at
 
-	inv_num = norm["invoice_number"]
-	seller = norm["vendor_name"]
-	buyer = norm["buyer_name"]
-	date = norm["invoice_date"]
-	grand_total = norm["total_amount"]
-	currency = norm["currency"]
-	status = norm["payment_status"]
+    inv_num = norm["invoice_number"]
+    if inv_num and str(inv_num).strip() not in ("N/A", "Unknown", ""):
+        clean_inv = str(inv_num).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+        doc_id = f"inv_{user_id_str}_{clean_inv}"
+    else:
+        doc_id = f"inv_{uuid.uuid4().hex[:12]}"
 
-	# Prepare clean primitive metadata for ChromaDB (strings, floats, ints, bools only)
-	metadata = {
-		"document_type": str(structured_json.get("document_type", "invoice")),
-		"file_name": file_name,
-		"invoice_number": str(inv_num).strip(),
-		"vendor_name": str(seller).strip(),
-		"buyer_name": str(buyer).strip(),
-		"invoice_date": str(date).strip(),
-		"total_amount": float(grand_total),
-		"subtotal": float(norm.get("subtotal") or 0.0),
-		"tax": float(norm.get("tax") or 0.0),
-		"discount": float(norm.get("discount") or 0.0),
-		"currency": str(currency).strip(),
-		"payment_status": str(status).strip(),
-		"uploaded_at": uploaded_at,
-		"user_id": str(user_id) if user_id else "",
-	}
+    from vies_service import check_vat_vies
+    vies_res = check_vat_vies(norm.get("vat_id") or "")
+    norm["vies_status"] = vies_res["status"]
+    norm["vies_checked_at"] = vies_res["checked_at"]
+    norm["vies_details"] = vies_res.get("details", "")
 
-	# Deterministic doc_id, namespaced by owner: the same invoice number
-	# uploaded by two different users must never collide or overwrite.
-	if inv_num and str(inv_num).strip() not in ("N/A", "Unknown", ""):
-		clean_inv = str(inv_num).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
-		owner = str(user_id).strip() if user_id else "shared"
-		doc_id = f"inv_{owner}_{clean_inv}"
-	else:
-		doc_id = f"inv_{uuid.uuid4().hex[:12]}"
+    from validator import validate_invoice
+    val_report = validate_invoice(norm)
+    val_status = val_report.get("overall_status", "PASS")
 
-	doc_text = json.dumps({**structured_json, **norm}, indent=2)
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        iban_flag, prev_iban = _check_and_sync_vendor_iban(
+            conn,
+            u_clean,
+            norm,
+            vies_status=norm["vies_status"],
+            vies_checked_at=norm["vies_checked_at"],
+        )
+        dup_flag, dup_of = _check_duplicate_invoice(conn, u_clean, norm, file_name)
 
-	col.upsert(
-		documents=[doc_text],
-		metadatas=[metadata],
-		ids=[doc_id]
-	)
+        conn.execute(
+            """
+            INSERT INTO invoices (
+                doc_id, user_id, file_name, vendor_name, vendor_address,
+                vat_id, tax_number, vendor_iban, vendor_bic,
+                buyer_name, buyer_address, buyer_vat_id, leitweg_id,
+                invoice_number, document_type, invoice_date, delivery_date, due_date,
+                payment_terms, skonto_terms, skonto_percent, skonto_days, skonto_deadline, skonto_amount,
+                items, vat_breakdown, subtotal, tax, tax_amount, discount, total_amount,
+                currency, payment_status, validation_report, validation_status,
+                vies_status, vies_checked_at, vies_details,
+                iban_change_flag, previous_iban, duplicate_flag, duplicate_of, uploaded_at
+            ) VALUES (
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(user_id, file_name) DO UPDATE SET
+                doc_id=excluded.doc_id,
+                vendor_name=excluded.vendor_name,
+                vendor_address=excluded.vendor_address,
+                vat_id=excluded.vat_id,
+                tax_number=excluded.tax_number,
+                vendor_iban=excluded.vendor_iban,
+                vendor_bic=excluded.vendor_bic,
+                buyer_name=excluded.buyer_name,
+                buyer_address=excluded.buyer_address,
+                buyer_vat_id=excluded.buyer_vat_id,
+                leitweg_id=excluded.leitweg_id,
+                invoice_number=excluded.invoice_number,
+                document_type=excluded.document_type,
+                invoice_date=excluded.invoice_date,
+                delivery_date=excluded.delivery_date,
+                due_date=excluded.due_date,
+                payment_terms=excluded.payment_terms,
+                skonto_terms=excluded.skonto_terms,
+                skonto_percent=excluded.skonto_percent,
+                skonto_days=excluded.skonto_days,
+                skonto_deadline=excluded.skonto_deadline,
+                skonto_amount=excluded.skonto_amount,
+                items=excluded.items,
+                vat_breakdown=excluded.vat_breakdown,
+                subtotal=excluded.subtotal,
+                tax=excluded.tax,
+                tax_amount=excluded.tax_amount,
+                discount=excluded.discount,
+                total_amount=excluded.total_amount,
+                currency=excluded.currency,
+                payment_status=excluded.payment_status,
+                validation_report=excluded.validation_report,
+                validation_status=excluded.validation_status,
+                vies_status=excluded.vies_status,
+                vies_checked_at=excluded.vies_checked_at,
+                vies_details=excluded.vies_details,
+                iban_change_flag=excluded.iban_change_flag,
+                previous_iban=excluded.previous_iban,
+                duplicate_flag=excluded.duplicate_flag,
+                duplicate_of=excluded.duplicate_of,
+                uploaded_at=excluded.uploaded_at
+            """,
+            (
+                doc_id,
+                u_clean,
+                file_name,
+                str(norm.get("vendor_name") or "").strip(),
+                str(norm.get("vendor_address") or "").strip(),
+                str(norm.get("vat_id") or "").strip(),
+                str(norm.get("tax_number") or "").strip(),
+                str(norm.get("vendor_iban") or "").strip(),
+                str(norm.get("vendor_bic") or "").strip(),
+                str(norm.get("buyer_name") or "").strip(),
+                str(norm.get("buyer_address") or "").strip(),
+                str(norm.get("buyer_vat_id") or "").strip(),
+                str(norm.get("leitweg_id") or "").strip(),
+                str(inv_num).strip(),
+                str(norm.get("document_type") or "invoice"),
+                str(norm.get("invoice_date") or "").strip(),
+                str(norm.get("delivery_date") or "").strip(),
+                str(norm.get("due_date") or "").strip(),
+                str(norm.get("payment_terms") or "").strip(),
+                str(norm.get("skonto_terms") or "").strip(),
+                float(norm.get("skonto_percent") or 0.0),
+                int(norm.get("skonto_days") or 0),
+                str(norm.get("skonto_deadline") or "").strip(),
+                float(norm.get("skonto_amount") or 0.0),
+                json.dumps(norm.get("line_items", []), ensure_ascii=False),
+                json.dumps(norm.get("vat_breakdown", []), ensure_ascii=False),
+                float(norm.get("subtotal") or 0.0),
+                float(norm.get("tax_amount") or 0.0),
+                float(norm.get("tax_amount") or 0.0),
+                float(norm.get("discount") or 0.0),
+                float(norm.get("total_amount") or 0.0),
+                str(norm.get("currency") or "EUR").strip(),
+                str(norm.get("payment_status") or "Unpaid").strip(),
+                json.dumps(val_report, ensure_ascii=False),
+                val_status,
+                norm["vies_status"],
+                norm["vies_checked_at"],
+                norm["vies_details"],
+                iban_flag,
+                prev_iban,
+                dup_flag,
+                dup_of,
+                uploaded_at,
+            ),
+        )
+        _sync_fts_row(
+            conn,
+            doc_id=doc_id,
+            user_id=u_clean,
+            vendor_name=norm.get("vendor_name") or "",
+            invoice_number=inv_num,
+            line_items=norm.get("line_items") or [],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
-	# Synchronize with SQLite invoices table if user_id provided
-	if user_id:
-		try:
-			import sqlite3
-			from config import CHAT_DB_PATH
-			conn = sqlite3.connect(CHAT_DB_PATH)
-			cursor = conn.cursor()
-			u_clean = str(user_id).replace("-", "")
-			cursor.execute("""
-				INSERT INTO invoices (
-					user_id, file_name, vendor_name, vendor_address,
-					buyer_name, buyer_address, invoice_number, invoice_date,
-					items, subtotal, tax, discount, total_amount
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(user_id, file_name) DO UPDATE SET
-					user_id=excluded.user_id,
-					vendor_name=excluded.vendor_name,
-					invoice_number=excluded.invoice_number,
-					total_amount=excluded.total_amount,
-					items=excluded.items,
-					invoice_date=excluded.invoice_date,
-					subtotal=excluded.subtotal,
-					tax=excluded.tax,
-					discount=excluded.discount
-			""", (
-				u_clean,
-				file_name,
-				str(seller).strip(),
-				str(norm.get("vendor_address") or "").strip(),
-				str(buyer).strip(),
-				str(norm.get("buyer_address") or "").strip(),
-				str(inv_num).strip(),
-				str(date).strip(),
-				json.dumps(norm.get("line_items", [])),
-				float(norm.get("subtotal") or 0.0),
-				float(norm.get("tax") or 0.0),
-				float(norm.get("discount") or 0.0),
-				float(grand_total),
-			))
-			conn.commit()
-			conn.close()
-		except Exception as exc:
-			logger.warning("Could not persist to SQLite invoices table: %s", exc)
-
-	return col
+    norm["_doc_id"] = doc_id
+    norm["doc_id"] = doc_id
+    norm["validation_report"] = val_report
+    norm["validation_status"] = val_status
+    norm["iban_change_flag"] = iban_flag
+    norm["previous_iban"] = prev_iban
+    norm["duplicate_flag"] = dup_flag
+    norm["duplicate_of"] = dup_of
+    return norm
 
 
-def delete_invoice(doc_id: str, index_path: str = DEFAULT_CHROMA_PATH, user_id: Optional[str] = None) -> bool:
-	"""
-	Delete a single invoice from ChromaDB by its ID.
-	Optionally validates user_id ownership before deletion.
-	Returns True if deleted, False if document was not found or error occurred.
-	"""
-	try:
-		col = get_collection(path=index_path)
-		existing = col.get(ids=[doc_id])
-		if not existing or not existing.get("ids"):
-			return False
+def update_invoice_record(
+    identifier: str,
+    updates: Dict[str, Any],
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    existing = get_invoice_by_identifier(identifier, user_id=user_id)
+    if not existing:
+        return None
 
-		# Check ownership if user_id supplied
-		if user_id:
-			metas = existing.get("metadatas") or [{}]
-			doc_user = metas[0].get("user_id") if metas else None
-			if doc_user and str(doc_user) != str(user_id):
-				return False
+    merged = {**existing}
+    for k, v in updates.items():
+        if v is not None:
+            merged[k] = v
 
-		col.delete(ids=[doc_id])
+    norm = normalize_invoice_data(merged, file_name=existing.get("file_name", ""))
+    if "payment_status" in updates:
+        norm["payment_status"] = str(updates["payment_status"])
+    if "datev_booked" in updates:
+        norm["datev_booked"] = int(bool(updates["datev_booked"]))
+    else:
+        norm["datev_booked"] = existing.get("datev_booked", 0)
+    if "datev_account" in updates:
+        norm["datev_account"] = str(updates["datev_account"])
+    else:
+        norm["datev_account"] = existing.get("datev_account", "")
 
-		# Also clean up from SQLite invoices table
-		try:
-			import sqlite3
-			from config import CHAT_DB_PATH
-			conn = sqlite3.connect(CHAT_DB_PATH)
-			file_name = (existing.get("metadatas") or [{}])[0].get("file_name", "")
-			if file_name:
-				conn.execute("DELETE FROM invoices WHERE file_name = ?", (file_name,))
-				conn.commit()
-			conn.close()
-		except Exception:
-			pass
+    from vies_service import check_vat_vies
+    if updates.get("recheck_vies") or norm.get("vat_id") != existing.get("vat_id"):
+        vies_res = check_vat_vies(norm.get("vat_id") or "")
+        norm["vies_status"] = vies_res["status"]
+        norm["vies_checked_at"] = vies_res["checked_at"]
+        norm["vies_details"] = vies_res.get("details", "")
+    else:
+        norm["vies_status"] = existing.get("vies_status", "unchecked")
+        norm["vies_checked_at"] = existing.get("vies_checked_at", "")
+        norm["vies_details"] = existing.get("vies_details", "")
 
-		return True
-	except Exception as exc:
-		logger.error("Failed to delete document %s from ChromaDB: %s", doc_id, exc)
-		return False
+    from validator import validate_invoice
+    val_report = validate_invoice(norm)
+    val_status = val_report.get("overall_status", "PASS")
+
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        u_clean = str(_resolve_user_id(user_id) or "").replace("-", "")
+        iban_flag, prev_iban = _check_and_sync_vendor_iban(
+            conn,
+            u_clean,
+            norm,
+            vies_status=norm["vies_status"],
+            vies_checked_at=norm["vies_checked_at"],
+        )
+        if updates.get("acknowledge_iban_change"):
+            iban_flag = 0
+            prev_iban = ""
+            conn.execute(
+                "UPDATE vendors SET iban = ?, bic = ? WHERE lower(vendor_name) = lower(?)",
+                (norm.get("vendor_iban") or "", norm.get("vendor_bic") or "", norm.get("vendor_name") or ""),
+            )
+
+        conn.execute(
+            """
+            UPDATE invoices SET
+                vendor_name = ?,
+                vendor_address = ?,
+                vat_id = ?,
+                tax_number = ?,
+                vendor_iban = ?,
+                vendor_bic = ?,
+                buyer_name = ?,
+                buyer_address = ?,
+                buyer_vat_id = ?,
+                leitweg_id = ?,
+                invoice_number = ?,
+                document_type = ?,
+                invoice_date = ?,
+                delivery_date = ?,
+                due_date = ?,
+                payment_terms = ?,
+                skonto_terms = ?,
+                skonto_percent = ?,
+                skonto_days = ?,
+                skonto_deadline = ?,
+                skonto_amount = ?,
+                items = ?,
+                vat_breakdown = ?,
+                subtotal = ?,
+                tax = ?,
+                tax_amount = ?,
+                discount = ?,
+                total_amount = ?,
+                currency = ?,
+                payment_status = ?,
+                validation_report = ?,
+                validation_status = ?,
+                vies_status = ?,
+                vies_checked_at = ?,
+                vies_details = ?,
+                iban_change_flag = ?,
+                previous_iban = ?,
+                datev_booked = ?,
+                datev_account = ?
+            WHERE id = ?
+            """,
+            (
+                norm["vendor_name"],
+                norm["vendor_address"],
+                norm["vat_id"],
+                norm["tax_number"],
+                norm["vendor_iban"],
+                norm["vendor_bic"],
+                norm["buyer_name"],
+                norm["buyer_address"],
+                norm["buyer_vat_id"],
+                norm["leitweg_id"],
+                norm["invoice_number"],
+                norm["document_type"],
+                norm["invoice_date"],
+                norm["delivery_date"],
+                norm["due_date"],
+                norm["payment_terms"],
+                norm["skonto_terms"],
+                float(norm["skonto_percent"] or 0.0),
+                int(norm["skonto_days"] or 0),
+                norm["skonto_deadline"],
+                float(norm["skonto_amount"] or 0.0),
+                json.dumps(norm["line_items"], ensure_ascii=False),
+                json.dumps(norm["vat_breakdown"], ensure_ascii=False),
+                float(norm["subtotal"] or 0.0),
+                float(norm["tax_amount"] or 0.0),
+                float(norm["tax_amount"] or 0.0),
+                float(norm["discount"] or 0.0),
+                float(norm["total_amount"] or 0.0),
+                norm["currency"],
+                norm["payment_status"],
+                json.dumps(val_report, ensure_ascii=False),
+                val_status,
+                norm["vies_status"],
+                norm["vies_checked_at"],
+                norm["vies_details"],
+                iban_flag,
+                prev_iban,
+                int(norm.get("datev_booked") or 0),
+                str(norm.get("datev_account") or ""),
+                existing["id"],
+            ),
+        )
+        _sync_fts_row(
+            conn,
+            doc_id=existing["doc_id"],
+            user_id=u_clean,
+            vendor_name=norm["vendor_name"],
+            invoice_number=norm["invoice_number"],
+            line_items=norm["line_items"],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return get_invoice_by_identifier(str(existing["id"]), user_id=user_id)
+
+
+def delete_invoice(
+    doc_id: str,
+    index_path: str = DEFAULT_CHROMA_PATH,
+    user_id: Optional[str] = None,
+) -> bool:
+    init_db(CHAT_DB_PATH)
+    existing = get_invoice_by_identifier(doc_id, user_id=user_id)
+    if not existing:
+        return False
+
+    conn = sqlite3.connect(CHAT_DB_PATH, check_same_thread=False)
+    try:
+        conn.execute("DELETE FROM invoices WHERE id = ?", (existing["id"],))
+        conn.execute("DELETE FROM invoices_fts WHERE doc_id = ?", (existing["doc_id"],))
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("Failed to delete invoice %s: %s", doc_id, exc)
+        return False
+    finally:
+        conn.close()

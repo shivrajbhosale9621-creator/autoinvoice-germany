@@ -1,7 +1,6 @@
 /**
- * api.js — Centralized HTTP Client for AutoInvoice Intelligence FastAPI Service
- * All fetch operations include credentials: "include" for secure httpOnly cookie authentication.
- * Includes automatic token rotation on 401 using the 7-day refresh token.
+ * api.js - Centralized HTTP Client for AutoInvoice (German Mittelstand Edition)
+ * All fetch operations include credentials: "include" for httpOnly cookie authentication.
  */
 
 const API_BASE = "";
@@ -18,12 +17,6 @@ function onRefreshed(error) {
   refreshSubscribers = [];
 }
 
-/**
- * Robust fetch wrapper:
- * - Injects credentials: "include"
- * - On 401, attempts transparent token refresh via /auth/refresh and retries
- * - Broadcasts 'session-expired' if refresh fails
- */
 async function request(url, options = {}) {
   const mergedOptions = {
     ...options,
@@ -83,40 +76,23 @@ async function request(url, options = {}) {
 }
 
 export const api = {
-  /**
-   * Liveness / Health check
-   */
   async getHealth() {
     try {
       const res = await request(`${API_BASE}/api/health`);
       return await res.json();
     } catch (err) {
-      console.error("Health probe failed:", err);
       return { status: "error", error: err.message };
     }
   },
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Authentication Endpoints
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Get active user session info from access token cookie
-   */
+  // Auth
   async getMe() {
-    const res = await request(`${API_BASE}/auth/me`, {
-      method: "GET",
-    });
+    const res = await request(`${API_BASE}/auth/me`, { method: "GET" });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Register a new user
-   */
   async signup({ email, password }) {
     const res = await request(`${API_BASE}/auth/signup`, {
       method: "POST",
@@ -124,15 +100,10 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Verify 6-digit OTP code
-   */
   async verifyOtp({ email, code, purpose = "email_verification" }) {
     const res = await request(`${API_BASE}/auth/verify-otp`, {
       method: "POST",
@@ -140,15 +111,10 @@ export const api = {
       body: JSON.stringify({ email, code, purpose }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Resend OTP code
-   */
   async resendOtp({ email, purpose = "email_verification" }) {
     const res = await request(`${API_BASE}/auth/resend-otp`, {
       method: "POST",
@@ -156,15 +122,10 @@ export const api = {
       body: JSON.stringify({ email, purpose }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Log in user
-   */
   async login({ email, password }) {
     const res = await request(`${API_BASE}/auth/login`, {
       method: "POST",
@@ -172,29 +133,19 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Log out user
-   */
   async logout() {
     try {
-      const res = await request(`${API_BASE}/auth/logout`, {
-        method: "POST",
-      });
+      const res = await request(`${API_BASE}/auth/logout`, { method: "POST" });
       return await res.json();
     } catch (err) {
       console.error("Logout error:", err);
     }
   },
 
-  /**
-   * Request password reset code
-   */
   async forgotPassword({ email }) {
     const res = await request(`${API_BASE}/auth/forgot-password`, {
       method: "POST",
@@ -202,15 +153,10 @@ export const api = {
       body: JSON.stringify({ email }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Reset password with OTP
-   */
   async resetPassword({ email, code, new_password }) {
     const res = await request(`${API_BASE}/auth/reset-password`, {
       method: "POST",
@@ -218,183 +164,275 @@ export const api = {
       body: JSON.stringify({ email, code, new_password }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw { status: res.status, data };
     return data;
   },
 
-  /**
-   * Rotate and refresh auth tokens
-   */
-  async refreshToken() {
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
+  // Invoices & FTS5 Search
+  async getInvoices(includeIds = true, searchQuery = "") {
+    const params = new URLSearchParams();
+    params.append("include_ids", includeIds);
+    if (searchQuery) params.append("q", searchQuery);
+    const res = await request(`${API_BASE}/api/invoices?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Belege konnten nicht geladen werden");
+    return data;
+  },
+
+  async getInvoiceDetail(docId) {
+    const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Belegdetails konnten nicht geladen werden");
+    return data;
+  },
+
+  async updateInvoice(docId, updates) {
+    const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw { status: res.status, data };
-    }
+    if (!res.ok) throw new Error(data.error || "Beleg konnte nicht gespeichert werden");
     return data;
   },
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Invoice & Chat Endpoints
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Fetch all invoices for active user from ChromaDB & SQLite
-   * @param {boolean} includeIds - Include internal _doc_id for deletions
-   */
-  async getInvoices(includeIds = true) {
-    try {
-      const res = await request(`${API_BASE}/api/invoices?include_ids=${includeIds}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load invoices");
-      return data;
-    } catch (err) {
-      console.error("getInvoices error:", err);
-      throw err;
-    }
+  async revalidateInvoice(docId) {
+    const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}/validate`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Validierung fehlgeschlagen");
+    return data;
   },
 
-  /**
-   * Delete an invoice by _doc_id
-   */
+  getXRechnungDownloadUrl(docId, leitwegId = "", useSettingsLeitweg = false) {
+    const params = new URLSearchParams();
+    if (leitwegId) params.append("leitweg_id", leitwegId);
+    if (useSettingsLeitweg) params.append("use_settings_leitweg", "true");
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return `${API_BASE}/api/invoice/${encodeURIComponent(docId)}/xrechnung${qs}`;
+  },
+
   async deleteInvoice(docId, conversationId = "", userId = "") {
-    try {
-      const params = new URLSearchParams();
-      if (conversationId) params.append("conversation_id", conversationId);
-      if (userId) params.append("user_id", userId);
-
-      const qs = params.toString() ? `?${params.toString()}` : "";
-      const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}${qs}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Deletion failed");
-      return data;
-    } catch (err) {
-      console.error("deleteInvoice error:", err);
-      throw err;
-    }
+    const params = new URLSearchParams();
+    if (conversationId) params.append("conversation_id", conversationId);
+    if (userId) params.append("user_id", userId);
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}${qs}`, {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Löschen fehlgeschlagen");
+    return data;
   },
 
-  /**
-   * Dedicated Upload Center: Fast OCR + Indexing
-   */
   async uploadInvoice(file, conversationId = "", userId = "") {
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (conversationId) formData.append("conversation_id", conversationId);
-      if (userId) formData.append("user_id", userId);
+    const formData = new FormData();
+    formData.append("file", file);
+    if (conversationId) formData.append("conversation_id", conversationId);
+    if (userId) formData.append("user_id", userId);
 
-      const res = await request(`${API_BASE}/api/invoice/upload`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-      return data;
-    } catch (err) {
-      console.error("uploadInvoice error:", err);
-      throw err;
-    }
+    const res = await request(`${API_BASE}/api/invoice/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Upload fehlgeschlagen");
+    return data;
   },
 
-  /**
-   * Main Conversational Agent: Handles both text and optional file attachment
-   */
+  // Settings (Task 2)
+  async getSettings() {
+    const res = await request(`${API_BASE}/api/settings`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Einstellungen konnten nicht geladen werden");
+    return data;
+  },
+
+  async updateSettings(settingsPayload) {
+    const res = await request(`${API_BASE}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settingsPayload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Einstellungen konnten nicht gespeichert werden");
+    return data;
+  },
+
+  // Vendors & Price Comparison (Task 7)
+  async getVendors(itemQuery = "") {
+    const qs = itemQuery ? `?item_query=${encodeURIComponent(itemQuery)}` : "";
+    const res = await request(`${API_BASE}/api/vendors${qs}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Lieferanten konnten nicht geladen werden");
+    return data;
+  },
+
+  async updateVendor(vendorName, payload) {
+    const res = await request(`${API_BASE}/api/vendors/${encodeURIComponent(vendorName)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Lieferant konnte nicht aktualisiert werden");
+    return data;
+  },
+
+  // Dashboard Summary: Cashflow, Skonto, Validation Health, Proactive Alerts (Task 8 & Tier 2)
+  async getDashboardSummary() {
+    const res = await request(`${API_BASE}/api/dashboard/summary`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Dashboard-Daten konnten nicht geladen werden");
+    return data;
+  },
+
+  // VIES Check (Task 9)
+  async checkVies(vatId, docId = "") {
+    const res = await request(`${API_BASE}/api/vies/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vat_id: vatId, doc_id: docId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "VIES-Prüfung fehlgeschlagen");
+    return data;
+  },
+
+  // SEPA pain.001 Payment Run (Task 10)
+  async previewSepaRun(invoiceIds, applySkonto = false) {
+    const res = await request(`${API_BASE}/api/sepa/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ invoice_ids: invoiceIds, apply_skonto: applySkonto }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "SEPA-Vorschau fehlgeschlagen");
+    return data;
+  },
+
+  async executeSepaRun({ invoiceIds, applySkonto = false, executionDate = "", humanApproved = false }) {
+    const res = await request(`${API_BASE}/api/sepa/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        invoice_ids: invoiceIds,
+        apply_skonto: applySkonto,
+        execution_date: executionDate,
+        human_approved: humanApproved,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "SEPA-Zahllauf fehlgeschlagen");
+    return data;
+  },
+
+  async getSepaRuns() {
+    const res = await request(`${API_BASE}/api/sepa/runs`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Zahlläufe konnten nicht geladen werden");
+    return data;
+  },
+
+  getSepaRunDownloadUrl(runId) {
+    return `${API_BASE}/api/sepa/runs/${encodeURIComponent(runId)}/download`;
+  },
+
+  // Month-End Checklist & Tax Summary (Tier 2)
+  async getMonthEnd(month = "all") {
+    const res = await request(`${API_BASE}/api/month-end?month=${encodeURIComponent(month)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Monatsabschluss konnte nicht geladen werden");
+    return data;
+  },
+
+  async toggleMonthEndCheck({ month = "all", itemKey, checked, markBooked = false }) {
+    const res = await request(`${API_BASE}/api/month-end/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month, item_key: itemKey, checked, mark_booked: markBooked }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Status konnte nicht aktualisiert werden");
+    return data;
+  },
+
+  getDatevExportUrl(month = "all") {
+    return `${API_BASE}/api/datev/export?month=${encodeURIComponent(month)}`;
+  },
+
+  // Chat & Copilot Action Approvals
   async chat({ message, userId, conversationId, file = null, idempotencyKey = null }) {
-    try {
-      let body;
-      let headers = {};
+    let body;
+    let headers = {};
 
-      if (file) {
-        body = new FormData();
-        if (userId) body.append("user_id", userId);
-        body.append("message", message);
-        if (conversationId) body.append("conversation_id", conversationId);
-        if (idempotencyKey) body.append("idempotency_key", idempotencyKey);
-        body.append("file", file);
-      } else {
-        headers["Content-Type"] = "application/json";
-        body = JSON.stringify({
-          user_id: userId,
-          message: message,
-          conversation_id: conversationId,
-          idempotency_key: idempotencyKey,
-        });
-      }
-
-      const res = await request(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers,
-        body,
+    if (file) {
+      body = new FormData();
+      if (userId) body.append("user_id", userId);
+      body.append("message", message);
+      if (conversationId) body.append("conversation_id", conversationId);
+      if (idempotencyKey) body.append("idempotency_key", idempotencyKey);
+      body.append("file", file);
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify({
+        user_id: userId,
+        message: message,
+        conversation_id: conversationId,
+        idempotency_key: idempotencyKey,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Chat agent request failed");
-      return data;
-    } catch (err) {
-      console.error("chat error:", err);
-      throw err;
     }
+
+    const res = await request(`${API_BASE}/api/chat`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "KI-Anfrage fehlgeschlagen");
+    return data;
   },
 
-  /**
-   * Fetch conversation list for the active user
-   */
+  async resolveCopilotAction(actionId, decision) {
+    const res = await request(`${API_BASE}/api/chat/actions/${encodeURIComponent(actionId)}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Freigabeaktion fehlgeschlagen");
+    return data;
+  },
+
   async getConversations(userId) {
-    try {
-      const res = await request(`${API_BASE}/api/chat/conversations`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load conversations");
-      return data;
-    } catch (err) {
-      console.error("getConversations error:", err);
-      throw err;
-    }
+    const res = await request(`${API_BASE}/api/chat/conversations`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Konversationen konnten nicht geladen werden");
+    return data;
   },
 
-  /**
-   * Fetch message history for a specific conversation
-   */
   async getChatHistory(conversationId, userId, limit = 50) {
-    try {
-      const res = await request(
-        `${API_BASE}/api/chat/history/${encodeURIComponent(conversationId)}?limit=${limit}`
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load chat history");
-      return data;
-    } catch (err) {
-      console.error("getChatHistory error:", err);
-      throw err;
-    }
+    const res = await request(
+      `${API_BASE}/api/chat/history/${encodeURIComponent(conversationId)}?limit=${limit}`
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Chatverlauf konnte nicht geladen werden");
+    return data;
   },
 
-  /**
-   * Build report download URL
-   */
   getReportDownloadUrl(filename) {
     return `${API_BASE}/api/report/download/${encodeURIComponent(filename)}`;
   },
 
-  /**
-   * Get all pinned dashboard custom charts for current user
-   */
   async getDashboardCharts() {
     const res = await request(`${API_BASE}/api/dashboard/charts`);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to load custom charts");
+    if (!res.ok) throw new Error(data.error || "Diagramme konnten nicht geladen werden");
     return data;
   },
 
-  /**
-   * Create and pin a new custom chart from prompt
-   */
   async createDashboardChart(prompt, title = "") {
     const res = await request(`${API_BASE}/api/dashboard/charts`, {
       method: "POST",
@@ -402,19 +440,16 @@ export const api = {
       body: JSON.stringify({ prompt, title }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to generate custom chart");
+    if (!res.ok) throw new Error(data.error || "Diagramm konnte nicht erstellt werden");
     return data;
   },
 
-  /**
-   * Delete a pinned chart
-   */
   async deleteDashboardChart(chartId) {
     const res = await request(`${API_BASE}/api/dashboard/charts/${encodeURIComponent(chartId)}`, {
       method: "DELETE",
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to delete custom chart");
+    if (!res.ok) throw new Error(data.error || "Diagramm konnte nicht gelöscht werden");
     return data;
   },
 };

@@ -3,7 +3,7 @@ sqlite_checkpointer.py - SQLite-backed LangGraph checkpoint saver.
 
 Compatible with langgraph 0.6.3 / langgraph-checkpoint 2.1.1.
 
-This is the *graph-state persistence* layer — distinct from chat_store.py
+This is the *graph-state persistence* layer - distinct from chat_store.py
 which handles application-facing conversation/message history.
 
 Responsibilities:

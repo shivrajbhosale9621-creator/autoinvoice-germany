@@ -1,322 +1,201 @@
 """
-Agent 2: QA & Reasoning Agent powered by LangGraph.
-Combines Global Markdown Summary Matrix table check with Vector Similarity Search.
+qa_agent.py - SQL-Only Invoice QA Agent (Task 1).
+
+ChromaDB vector search and LangGraph StateGraph have been removed.
+All invoice queries execute against SQLite (`invoices` table + `invoices_fts` FTS5
+full-text index on vendor_name, invoice_number, and item_descriptions).
 """
 
-import os
 import json
 import re
-from typing import TypedDict, Optional
+import sqlite3
+import logging
+from typing import Optional, List, Dict, Any
 
-from config import GROQ_API_KEY, GROQ_MODEL_NAME, DEFAULT_INDEX_PATH
+from config import GROQ_API_KEY, GROQ_MODEL_NAME, CHAT_DB_PATH, DEFAULT_INDEX_PATH
 from vector_store import (
-	load_index,
-	get_all_invoices,
-	get_all_invoices_with_ids,
-	get_all_invoices_matrix,
-	delete_invoice,
-	semantic_search_text,
+    get_all_invoices,
+    search_invoices_fts,
+    format_eur_de,
+    format_date_de,
+    _user_id_variants,
 )
 
-import pandas as pd
-from langgraph.graph import StateGraph, START, END
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
+logger = logging.getLogger(__name__)
 
 
+def _cite_invoice(inv_num: str) -> str:
+    """Format an invoice number as a clickable markdown citation link (Tier 2)."""
+    clean = str(inv_num or "N/A").strip()
+    if not clean or clean == "N/A":
+        return clean
+    return f"[{clean}](#invoice/{clean})"
 
 
-# -------------------------------------------------------------
-# 2. Define LangGraph State Schema
-# -------------------------------------------------------------
-class QAState(TypedDict):
-	query: str                           # User question
-	index_path: str                      # Path to persisted LlamaIndex vector store
-	index_matrix: str                    # Global Markdown summary table
-	chat_history: Optional[list]         # Previous conversational messages
-	requires_vector_search: bool        # Decided by LLM Router
-	top_k: int                           # Dynamically calculated by LLM Router
-	retrieval_mode: str                  # "matrix" or "vector_search"
-	vector_search_prompt: Optional[str]  # Query string for vector store if needed
-	retrieved_chunks: Optional[str]      # Chunks retrieved from vector store
-	final_result: Optional[str]          # Final answer generated for user
-	user_id: Optional[str]               # Owner of the data; scopes every read
+def execute_sql_invoice_search(
+    question: str,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Run SQL and FTS5 queries against SQLite for a natural-language question.
+    Returns matching invoices, FTS5 matches, and structured field context.
+    """
+    all_invs = get_all_invoices(user_id=user_id)
+    fts_matches = search_invoices_fts(question, user_id=user_id, limit=15)
+
+    # Check if specific invoice number is mentioned in question
+    q_upper = question.upper()
+    direct_matches = [
+        inv for inv in all_invs
+        if inv.get("invoice_number") and str(inv["invoice_number"]).upper() in q_upper
+    ]
+
+    target_invs = direct_matches or fts_matches or all_invs
+    return {
+        "total_stored": len(all_invs),
+        "matched_count": len(target_invs),
+        "fts_match_count": len(fts_matches),
+        "invoices": target_invs[:15],
+        "all_invoices": all_invs,
+    }
 
 
-# -------------------------------------------------------------
-# 3. LangGraph Nodes
-# -------------------------------------------------------------
-def node_check_intent(state: QAState) -> dict:
-	"""
-	Node 1: Evaluates user query against Global Summary Matrix.
-	Decides if question can be answered from Matrix alone or needs Vector Search,
-	and dynamically calculates optimal top_k number.
-	"""
-	query = state["query"]
-	matrix = state["index_matrix"]
-
-	llm = ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL_NAME, temperature=0)
-
-	prompt = ChatPromptTemplate.from_template(
-		'''
-        You are a smart Invoice QA Router.
-        Analyze the User Question and the Global Summary Matrix Table below.
-
-        Global Summary Matrix:
-        {matrix}
-
-        User Question: "{query}"
-
-        Task:
-        1. Can this question be answered completely using the Global Summary Matrix Table alone? (e.g. total spend math, list vendors, count unpaid invoices, find invoice by number/date).
-        2. Or does it require deep line-item/itemized text inspection from individual original documents? (e.g. specific item serial numbers, itemized prices, warranty terms, full street addresses).
-        3. If vector search IS needed, inspect the Global Summary Matrix to see how many matching invoice files exist for this specific vendor/topic, and select an optimal top_k integer (e.g. 5, 10, 15, or exact matching count).
-
-        Field rules for the matrix (it carries subtotal, tax, discount and uploaded_at columns):
-        - subtotal is the bill amount BEFORE tax; total_amount is the grand total. Never report total_amount as the subtotal. If subtotal is 0 or missing, say "not extracted".
-        - "last uploaded" / "most recent" / "last N" questions sort by uploaded_at descending, NEVER by invoice_date. invoice_date is only for "latest by invoice date" questions.
-        - direct_answer may only state facts the matrix shows verbatim (single-invoice fields, vendor lists). Never compute sums, averages, or counts yourself.
-
-        Return ONLY a JSON response:
-        {{
-            "can_answer_from_matrix": true/false,
-            "top_k": integer (default 5, or exact count of matching invoices in matrix),
-            "search_query": "specific search string if vector search is needed, else empty string",
-            "direct_answer": "answer text if can_answer_from_matrix is true, else empty string"
-        }}
-        '''
-	)
-
-	chain = prompt | llm
-	response = chain.invoke({"matrix": matrix, "query": query})
-	content = getattr(response, "content", str(response)).strip()
-
-	if content.startswith("```"):
-		match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
-		if match:
-			content = match.group(1).strip()
-
-	try:
-		parsed = json.loads(content)
-		can_answer = parsed.get("can_answer_from_matrix", False)
-		top_k_val = int(parsed.get("top_k", 5))
-		direct_ans = parsed.get("direct_answer", "").strip()
-
-		if can_answer and direct_ans:
-			return {
-				"requires_vector_search": False,
-				"retrieval_mode": "matrix",
-				"top_k": top_k_val,
-				"final_result": direct_ans
-			}
-		else:
-			return {
-				"requires_vector_search": True,
-				"retrieval_mode": "vector_search",
-				"top_k": top_k_val,
-				"vector_search_prompt": parsed.get("search_query", query)
-			}
-	except Exception:
-		# Fallback to vector search if parsing fails
-		return {
-			"requires_vector_search": True,
-			"retrieval_mode": "vector_search",
-			"top_k": 5,
-			"vector_search_prompt": query
-		}
+def _format_sql_context_for_llm(sql_data: Dict[str, Any]) -> str:
+    lines = [f"SQLite Invoices Count: {sql_data.get('total_stored', 0)}"]
+    for inv in sql_data.get("invoices", []):
+        inv_no = inv.get("invoice_number", "N/A")
+        lines.append(
+            f"- Invoice {_cite_invoice(inv_no)} | Vendor: {inv.get('vendor_name')} | "
+            f"Buyer: {inv.get('buyer_name')} | VAT ID: {inv.get('vat_id') or 'fehlt'} | "
+            f"Date: {inv.get('invoice_date')} | Due: {inv.get('due_date') or 'N/A'} | "
+            f"Subtotal (Netto): {inv.get('subtotal'):.2f} {inv.get('currency', 'EUR')} | "
+            f"VAT (USt): {inv.get('tax_amount'):.2f} {inv.get('currency', 'EUR')} | "
+            f"Discount: {inv.get('discount'):.2f} | "
+            f"Total (Brutto): {inv.get('total_amount'):.2f} {inv.get('currency', 'EUR')} | "
+            f"Status: {inv.get('payment_status')} | Validation: {inv.get('validation_status')} | "
+            f"Uploaded At: {inv.get('uploaded_at')}"
+        )
+        items = inv.get("line_items") or []
+        for it in items[:15]:
+            lines.append(
+                f"    Pos {it.get('pos')}: [{it.get('article_number')}] {it.get('description')} | "
+                f"Qty: {it.get('quantity')} {it.get('unit')} | "
+                f"Price: {it.get('unit_price')} / PE {it.get('price_unit', 1)} | "
+                f"Disc: {it.get('discount_percent', 0)}% | "
+                f"Line Total: {it.get('line_total')} EUR | VAT: {it.get('vat_rate')}%"
+            )
+    return "\n".join(lines)
 
 
-def node_vector_search(state: QAState) -> dict:
-	"""
-	Node 2: Executes Vector Similarity Search using dynamically calculated top_k.
-	"""
-	search_prompt = state.get("vector_search_prompt") or state["query"]
-	top_k_val = state.get("top_k", 5)
-	index_path = state.get("index_path", DEFAULT_INDEX_PATH)
-
-	try:
-		retrieved_text = semantic_search_text(
-			query=search_prompt,
-			top_k=top_k_val,
-			index_path=index_path,
-			user_id=state.get("user_id"),
-		)
-		return {"retrieved_chunks": retrieved_text}
-	except Exception as e:
-		return {"retrieved_chunks": f"Vector retrieval error: {str(e)}"}
-
-
-
-def node_synthesize_answer(state: QAState) -> dict:
-	"""
-	Node 3: Combines retrieved vector chunks + Global Summary Matrix + chat history to produce final answer.
-	"""
-	query = state["query"]
-	matrix = state["index_matrix"]
-	chunks = state.get("retrieved_chunks", "No specific detailed chunks retrieved.")
-	history = state.get("chat_history") or []
-
-	history_text = ""
-	if history:
-		history_lines = []
-		for msg in history[-6:]:
-			role = getattr(msg, "type", "User")
-			content = getattr(msg, "content", str(msg))
-			history_lines.append(f"{role.capitalize()}: {content}")
-		history_text = "\nPrevious Conversation:\n" + "\n".join(history_lines) + "\n"
-
-	llm = ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL_NAME, temperature=0, max_tokens=1000)
-
-	prompt = ChatPromptTemplate.from_template(
-		'''
-        You are an expert Invoice QA Agent.
-        Answer the user's question using the Global Summary Matrix, Detailed Invoice Chunks, and Conversation History below.
-        Use whatever currency is specified in the invoices ($, ₹, €, etc.) properly. Always present clean vendor names without raw dictionary syntax.
-
-        Field rules:
-        - subtotal is the bill amount BEFORE tax; total_amount is the grand total. Never report total_amount as the subtotal. If subtotal is 0 or missing, say "not extracted".
-        - "last uploaded" / "most recent" / "last N" questions sort by uploaded_at descending, NEVER by invoice_date.
-        - Never compute sums, averages, or counts from the matrix or chunks yourself: state only what the data shows verbatim.
-        - If a vendor name in the question matches more than one vendor in the matrix, list each matching vendor's figures separately and ask which one the user meant. Never merge them into one number silently.
-
-        Global Summary Matrix:
-        {matrix}
-
-        Detailed Invoice Chunks:
-        {chunks}
-        {history}
-
-        User Question: "{query}"
-
-        Answer:
-        '''
-	)
-
-	chain = prompt | llm
-	try:
-		response = chain.invoke({"matrix": matrix, "chunks": chunks, "history": history_text, "query": query})
-		answer = getattr(response, "content", str(response)).strip()
-	except Exception as exc:
-		err_str = str(exc).lower()
-		if "429" in err_str or "rate limit" in err_str or "tokens" in err_str:
-			answer = "The AI service is busy, please wait a few seconds and try again."
-		else:
-			answer = "The AI service encountered a temporary error while formulating the answer. Please try again."
-	return {"final_result": answer}
-
-
-# -------------------------------------------------------------
-# 4. Conditional Edge Router
-# -------------------------------------------------------------
-def router_should_search(state: QAState) -> str:
-	"""Decides next node based on requires_vector_search flag."""
-	if state.get("requires_vector_search"):
-		return "vector_search"
-	return "end"
-
-
-# -------------------------------------------------------------
-# 5. Build & Compile LangGraph StateGraph
-# -------------------------------------------------------------
-def build_qa_graph():
-	builder = StateGraph(QAState)
-
-	# Add nodes
-	builder.add_node("check_intent", node_check_intent)
-	builder.add_node("vector_search", node_vector_search)
-	builder.add_node("synthesize_answer", node_synthesize_answer)
-
-	# Set flow edges
-	builder.add_edge(START, "check_intent")
-	builder.add_conditional_edges(
-		"check_intent",
-		router_should_search,
-		{
-			"vector_search": "vector_search",
-			"end": END
-		}
-	)
-	builder.add_edge("vector_search", "synthesize_answer")
-	builder.add_edge("synthesize_answer", END)
-
-	return builder.compile()
-
-
-# Compile global graph runner
-qa_graph_app = build_qa_graph()
-
-
-# -------------------------------------------------------------
-# 6. Main Entrypoint Function for QA Agent
-# -------------------------------------------------------------
 class QAAgent:
-	"""QA & Reasoning Sub-Agent for Orchestrator."""
+    """SQL-Only QA & Reasoning Sub-Agent for Orchestrator."""
 
-	def __init__(self, index_path: str = DEFAULT_INDEX_PATH, user_id: str = None):
-		self.index_path = index_path
-		self.user_id = str(user_id) if user_id is not None else None
+    def __init__(self, index_path: str = DEFAULT_INDEX_PATH, user_id: Optional[str] = None):
+        self.index_path = index_path
+        self.user_id = str(user_id) if user_id is not None else None
 
-	def answer(self, question: str, chat_history: list = None) -> dict:
-		"""
-		Main QA Agent Interface for Orchestrator.
-		Returns a standardized dictionary envelope:
-		{
-			"status": "success" | "failed",
-			"answer": str,
-			"retrieval_mode": "matrix" | "vector_search" | "none",
-			"error": str | None
-		}
-		"""
-		if not os.path.exists(self.index_path) or not os.listdir(self.index_path):
-			return {
-				"status": "failed",
-				"answer": "No invoices have been indexed yet. Please process invoices first.",
-				"retrieval_mode": "none",
-				"error": f"No index found at '{self.index_path}'"
-			}
+    def answer(self, question: str, chat_history: Optional[list] = None) -> dict:
+        """
+        Execute SQL + FTS5 lookup and return structured answer with citations.
+        """
+        try:
+            sql_data = execute_sql_invoice_search(question, user_id=self.user_id)
+            if sql_data["total_stored"] == 0:
+                return {
+                    "status": "failed",
+                    "answer": "Es sind noch keine Rechnungen in der SQLite-Datenbank gespeichert. / No invoices have been stored yet.",
+                    "retrieval_mode": "sql",
+                    "error": "No invoices in SQLite",
+                }
 
-		try:
-			index = load_index(self.index_path)
-			matrix = get_all_invoices_matrix(index, user_id=self.user_id)
+            sql_context = _format_sql_context_for_llm(sql_data)
 
-			initial_state: QAState = {
-				"query": question,
-				"index_path": self.index_path,
-				"index_matrix": matrix,
-				"chat_history": chat_history or [],
-				"requires_vector_search": False,
-				"top_k": 5,
-				"retrieval_mode": "matrix",
-				"user_id": self.user_id,
-				"vector_search_prompt": None,
-				"retrieved_chunks": None,
-				"final_result": None
-			}
+            if GROQ_API_KEY:
+                try:
+                    from langchain_groq import ChatGroq
+                    from langchain_core.prompts import ChatPromptTemplate
 
-			result_state = qa_graph_app.invoke(initial_state)
+                    history_text = ""
+                    if chat_history:
+                        h_lines = []
+                        for msg in chat_history[-6:]:
+                            role = getattr(msg, "type", "User")
+                            content = getattr(msg, "content", str(msg))
+                            h_lines.append(f"{role.capitalize()}: {content}")
+                        history_text = "\nPrevious Conversation:\n" + "\n".join(h_lines) + "\n"
 
-			return {
-				"status": "success",
-				"answer": result_state.get("final_result", "Could not generate an answer."),
-				"retrieval_mode": result_state.get("retrieval_mode", "unknown"),
-				"error": None
-			}
-		except Exception as e:
-			return {
-				"status": "failed",
-				"answer": f"An error occurred while answering: {str(e)}",
-				"retrieval_mode": "none",
-				"error": str(e)
-			}
+                    llm = ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL_NAME, temperature=0, max_tokens=1000)
+                    prompt = ChatPromptTemplate.from_template(
+                        """You are an expert German Invoice SQL Assistant.
+Answer the user's question using ONLY the SQLite query results below.
+Rules:
+- Never compute sums, averages, or counts yourself; state only the exact figures from the records.
+- Format every invoice reference as a markdown link like [RE-2026-10418](#invoice/RE-2026-10418).
+- Format EUR amounts in German notation (1.234,56 €) and dates as DD.MM.YYYY.
+- Never use em dashes in your response; use standard hyphens (-) instead.
+
+SQLite Records & FTS5 Matches:
+{sql_context}
+{history}
+
+User Question: "{query}"
+
+Answer:"""
+                    )
+                    chain = prompt | llm
+                    response = chain.invoke({"sql_context": sql_context, "history": history_text, "query": question})
+                    ans = getattr(response, "content", str(response)).strip().replace("-", "-")
+                    if ans:
+                        return {
+                            "status": "success",
+                            "answer": ans,
+                            "retrieval_mode": "sql_fts5",
+                            "error": None,
+                        }
+                except Exception as llm_exc:
+                    logger.debug("Groq synthesis unavailable in QAAgent, using deterministic SQL answer: %s", llm_exc)
+
+            # Deterministic SQL/FTS5 synthesis with citations
+            invs = sql_data["invoices"]
+            rows_out = [
+                f"Gefundene Belege in SQLite ({len(invs)} Treffer):"
+            ]
+            for inv in invs[:10]:
+                inv_no = inv.get("invoice_number", "N/A")
+                cite = _cite_invoice(inv_no)
+                vendor = inv.get("vendor_name", "Unbekannt")
+                dt_de = format_date_de(inv.get("invoice_date")) or inv.get("invoice_date", "N/A")
+                due_de = format_date_de(inv.get("due_date")) or inv.get("due_date", "N/A")
+                sub_de = format_eur_de(inv.get("subtotal", 0.0))
+                tax_de = format_eur_de(inv.get("tax_amount", 0.0))
+                tot_de = format_eur_de(inv.get("total_amount", 0.0))
+                val_st = inv.get("validation_status", "PENDING")
+                rows_out.append(
+                    f"- **{cite}** ({vendor}, Datum: {dt_de}, Fällig: {due_de}): "
+                    f"Netto {sub_de}, USt {tax_de}, Brutto **{tot_de}** "
+                    f"(Status: {inv.get('payment_status')}, Prüfung: {val_st})"
+                )
+
+            return {
+                "status": "success",
+                "answer": "\n".join(rows_out),
+                "retrieval_mode": "sql_fts5",
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "answer": f"Fehler bei der SQL-Abfrage: {str(exc)}",
+                "retrieval_mode": "sql",
+                "error": str(exc),
+            }
 
 
 def invoice_qa(query: str, index_path: str = DEFAULT_INDEX_PATH, chat_history: list = None) -> str:
-	"""Backwards compatibility helper: returns string answer directly."""
-	agent = QAAgent(index_path=index_path)
-	res = agent.answer(question=query, chat_history=chat_history)
-	return res["answer"]
+    agent = QAAgent(index_path=index_path)
+    res = agent.answer(question=query, chat_history=chat_history)
+    return res["answer"]
 
 
 def query_invoice_data(index_path: str, question: str, chat_history: list = None) -> str:
-	"""Backwards compatibility helper for Streamlit UI."""
-	return invoice_qa(query=question, index_path=index_path, chat_history=chat_history)
+    return invoice_qa(query=question, index_path=index_path, chat_history=chat_history)

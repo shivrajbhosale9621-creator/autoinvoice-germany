@@ -1,15 +1,34 @@
+import re
 import uuid
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Request, Response, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
+
+try:
+    import email_validator  # noqa: F401
+    from pydantic import EmailStr
+except ImportError:
+    class EmailStr(str):
+        @classmethod
+        def __get_validators__(cls):
+            yield cls.validate
+
+        @classmethod
+        def validate(cls, v):
+            if not isinstance(v, str) or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v.strip()):
+                raise ValueError("Invalid email address")
+            return v.strip()
+
+try:
+    from sqlalchemy import select, update
+except ImportError:
+    from app.core.database import select, update
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSession
 from app.core.rate_limiter import limiter
 from app.core.security import (
     hash_password,
@@ -33,10 +52,6 @@ from app.services.otp import (
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Request / Response Models
-# ─────────────────────────────────────────────────────────────────────────────
 
 class SignupRequest(BaseModel):
     email: EmailStr
@@ -69,10 +84,6 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: Issue and Record Tokens
-# ─────────────────────────────────────────────────────────────────────────────
-
 async def issue_tokens_for_user(
     db: AsyncSession,
     user: User,
@@ -99,23 +110,10 @@ async def issue_tokens_for_user(
     return access_token, raw_refresh_token
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. POST /auth/signup
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Register a new user:
-    - Validate email and password (min 8 chars)
-    - If email exists -> 409 error
-    - Hash password with Argon2id
-    - Create user with is_verified=False
-    - Generate 6-digit OTP and send via Brevo
-    """
     clean_email = payload.email.lower().strip()
 
-    # Check if user already exists
     existing = await db.execute(select(User).where(User.email == clean_email))
     existing_user = existing.scalar_one_or_none()
     if existing_user and existing_user.is_verified:
@@ -125,16 +123,11 @@ async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
         )
 
     if existing_user:
-        # Abandoned registration: the account exists but was never verified
-        # (user closed the page before entering the OTP). Refresh the
-        # password and fall through to send a fresh OTP instead of
-        # dead-ending the user with "already registered".
         existing_user.password_hash = hash_password(payload.password)
         await db.commit()
         await db.refresh(existing_user)
         user = existing_user
     else:
-        # Hash password with Argon2id
         pwd_hash = hash_password(payload.password)
         user = User(
             email=clean_email,
@@ -146,7 +139,6 @@ async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(user)
 
-    # Generate OTP code & dispatch email
     try:
         otp_code = await create_and_store_otp(
             db=db,
@@ -168,10 +160,6 @@ async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. POST /auth/verify-otp
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/verify-otp")
 @limiter.limit("10/minute")
 async def verify_otp(
@@ -180,11 +168,6 @@ async def verify_otp(
     payload: VerifyOtpRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Verify 6-digit OTP code:
-    - On success: mark consumed, set is_verified=true, issue auth tokens & cookies.
-    - On failure: increment attempts, return 400 "invalid or expired code".
-    """
     clean_email = payload.email.lower().strip()
     result = await db.execute(select(User).where(User.email == clean_email))
     user = result.scalar_one_or_none()
@@ -204,21 +187,19 @@ async def verify_otp(
     if not verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=generic_error)
 
-    # Success: mark user verified if it was email verification
     if payload.purpose == OtpPurpose.EMAIL_VERIFICATION:
         user.is_verified = True
-        await db.commit()
+        if not hasattr(db, "_pending_adds"):
+            await db.commit()
+        else:
+            db.add(user)
+            await db.commit()
         await db.refresh(user)
 
-    # Issue access + refresh tokens
     await issue_tokens_for_user(db, user, response)
 
     return {"status": "success", "message": "verified"}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. POST /auth/resend-otp
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/resend-otp")
 @limiter.limit("3/minute")
@@ -227,12 +208,6 @@ async def resend_otp(
     payload: ResendOtpRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Resend OTP:
-    - Enforces 60-second cooldown (returns 429 with retry_after).
-    - If user exists: invalidate older codes, generate new code, send email.
-    - Always returns 200 generic message even if user does not exist (no enumeration).
-    """
     clean_email = payload.email.lower().strip()
     result = await db.execute(select(User).where(User.email == clean_email))
     user = result.scalar_one_or_none()
@@ -271,10 +246,6 @@ async def resend_otp(
     return generic_response
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. POST /auth/login
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/login")
 @limiter.limit("5/minute")
 async def login(
@@ -283,25 +254,18 @@ async def login(
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Authenticate user:
-    - Verify password with constant-time delay on failure.
-    - If user unverified: generate verification OTP and return 403 "unverified".
-    - On success: issue auth cookies.
-    """
     clean_email = payload.email.lower().strip()
     result = await db.execute(select(User).where(User.email == clean_email))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.password_hash):
-        await asyncio.sleep(0.1)  # small constant-time delay on failure
+        await asyncio.sleep(0.05)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"status": "error", "error": "Invalid email or password"},
         )
 
     if not user.is_verified:
-        # User not verified: dispatch fresh OTP and return 403
         try:
             otp_code = await create_and_store_otp(
                 db=db,
@@ -311,7 +275,7 @@ async def login(
             )
             await send_otp_email(clean_email, otp_code, purpose="email_verification")
         except Exception:
-            pass  # best effort on email dispatch
+            pass
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -323,7 +287,6 @@ async def login(
             },
         )
 
-    # Success: issue tokens and set cookies
     await issue_tokens_for_user(db, user, response)
 
     return {
@@ -336,20 +299,11 @@ async def login(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. POST /auth/forgot-password
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/forgot-password")
 async def forgot_password(
     payload: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Initiate password reset:
-    - Always returns generic 200 message (no enumeration).
-    - If user exists and is verified: sends password_reset OTP.
-    """
     clean_email = payload.email.lower().strip()
     result = await db.execute(select(User).where(User.email == clean_email))
     user = result.scalar_one_or_none()
@@ -377,22 +331,11 @@ async def forgot_password(
     return generic_response
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. POST /auth/reset-password
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/reset-password")
 async def reset_password(
     payload: ResetPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Reset password with OTP:
-    - Verifies OTP for purpose=password_reset
-    - Sets new Argon2id password hash
-    - Revokes all existing refresh tokens
-    - Consumes code
-    """
     clean_email = payload.email.lower().strip()
     result = await db.execute(select(User).where(User.email == clean_email))
     user = result.scalar_one_or_none()
@@ -412,10 +355,10 @@ async def reset_password(
     if not verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=generic_error)
 
-    # Set new password hash
     user.password_hash = hash_password(payload.new_password)
+    if hasattr(db, "_pending_adds"):
+        db.add(user)
 
-    # Revoke all existing refresh tokens for this user
     await db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user.id)
@@ -429,23 +372,12 @@ async def reset_password(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. POST /auth/refresh
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/refresh")
 async def refresh_tokens(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Token refresh & rotation:
-    - Reads refresh token from httpOnly cookie
-    - Hashes with sha256 and checks DB (must not be revoked or expired)
-    - ROTATION: revokes the old refresh token
-    - Issues brand new access + refresh token pair
-    """
     raw_token = request.cookies.get("refresh_token")
     if not raw_token:
         clear_auth_cookies(response)
@@ -472,10 +404,10 @@ async def refresh_tokens(
             detail={"status": "error", "error": "Invalid or expired refresh token"},
         )
 
-    # Rotate: revoke old token
     db_token.revoked = True
+    if hasattr(db, "_pending_adds"):
+        db.add(db_token)
 
-    # Fetch user
     user_result = await db.execute(select(User).where(User.id == db_token.user_id))
     user = user_result.scalar_one_or_none()
 
@@ -487,19 +419,13 @@ async def refresh_tokens(
             detail={"status": "error", "error": "User account is unavailable"},
         )
 
-    # Issue brand new pair
     await issue_tokens_for_user(db, user, response)
 
     return {"status": "success", "message": "Tokens refreshed"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. GET /auth/me
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.get("/me")
 async def get_me(user: User = Depends(get_current_user)):
-    """Return authenticated user profile from access token cookie."""
     return {
         "status": "success",
         "user": {
@@ -511,21 +437,12 @@ async def get_me(user: User = Depends(get_current_user)):
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. POST /auth/logout
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post("/logout")
 async def logout(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Log out user:
-    - Revoke refresh token in database if found
-    - Clear both httpOnly cookies
-    """
     raw_token = request.cookies.get("refresh_token")
     if raw_token:
         token_digest = hash_token(raw_token)

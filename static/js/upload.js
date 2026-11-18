@@ -1,8 +1,10 @@
 /**
- * upload.js — Upload Center with Processing Docket & Ink Receipt Stages
+ * upload.js - Upload Center (Rechnungseingang) with Processing Docket,
+ * 9-Rule Validation Badge, and Direct Navigation to Per-Invoice Detail Page & XRechnung Download.
  */
 
 import { api } from "./api.js";
+import { formatMoneyDE, formatDateDE } from "./charts.js";
 
 export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
   const dropzone = document.getElementById("dropzone-card");
@@ -10,6 +12,9 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
   const processingDocket = document.getElementById("processing-docket");
   const resultCard = document.getElementById("extraction-result-card");
   const btnUploadAnother = document.getElementById("btn-upload-another");
+  const btnOpenUploadedDetail = document.getElementById("btn-open-uploaded-detail");
+
+  let lastUploadedDocId = "";
 
   if (!dropzone || !fileInput) return;
 
@@ -38,7 +43,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
     }
   });
 
-  fileInput.addEventListener("change", (e) => {
+  fileInput.addEventListener("change", () => {
     const files = Array.from(fileInput.files || []);
     if (files.length > 0) {
       handleFiles(files);
@@ -54,6 +59,16 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
     });
   }
 
+  if (btnOpenUploadedDetail) {
+    btnOpenUploadedDetail.addEventListener("click", () => {
+      if (lastUploadedDocId && typeof window.openInvoiceDetail === "function") {
+        window.openInvoiceDetail(lastUploadedDocId);
+      } else if (typeof window.switchView === "function") {
+        window.switchView("ledger");
+      }
+    });
+  }
+
   async function handleFiles(files) {
     const allowed = [".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"];
     const validFiles = [];
@@ -61,11 +76,11 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
     for (const file of files) {
       const ext = "." + file.name.split(".").pop().toLowerCase();
       if (!allowed.includes(ext)) {
-        showToast(`Skipping '${file.name}': unsupported file type '${ext}'.`, "error");
+        showToast(`Übersprungen '${file.name}': Dateityp '${ext}' nicht unterstützt.`, "error");
         continue;
       }
       if (file.size > 20 * 1024 * 1024) {
-        showToast(`Skipping '${file.name}': exceeds 20MB limit.`, "error");
+        showToast(`Übersprungen '${file.name}': Datei größer als 20 MB.`, "error");
         continue;
       }
       validFiles.push(file);
@@ -76,37 +91,30 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
       return;
     }
 
-    // Show processing docket
     dropzone.style.display = "none";
     if (resultCard) resultCard.style.display = "none";
     if (processingDocket) processingDocket.style.display = "block";
 
     let lastRes = null;
     let lastFilename = "";
-    let processedCount = 0;
 
     for (let i = 0; i < validFiles.length; i++) {
       const file = validFiles[i];
-      const batchLabel = validFiles.length > 1 ? ` (${i + 1} of ${validFiles.length})` : "";
+      const batchLabel = validFiles.length > 1 ? ` (${i + 1} von ${validFiles.length})` : "";
 
       const docketFileName = document.getElementById("docket-file-name");
       if (docketFileName) docketFileName.textContent = `${file.name}${batchLabel}`;
 
-      // Reset stages
       resetDocketStages();
 
-      // Start elapsed timer
       const startTime = Date.now();
       const timerInterval = setInterval(() => {
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
         const timerEl = document.getElementById("docket-timer");
-        if (timerEl) timerEl.textContent = `ELAPSED: ${elapsedSec}s`;
+        if (timerEl) timerEl.textContent = `DAUER: ${elapsedSec}s`;
       }, 100);
 
-      // Stage 1: Received immediately
       setStageStatus("stage-received", "completed", "+0.1s");
-
-      // Stages 2 to 5: Indeterminate state with spinners
       setStageStatus("stage-ocr", "active");
       setStageStatus("stage-extracted", "active");
       setStageStatus("stage-validated", "active");
@@ -116,7 +124,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
       const { userId, conversationId } = getSessionContext();
 
       try {
-        showToast(`Processing invoice ${i + 1}/${validFiles.length}: "${file.name}"...`, "info");
+        showToast(`Verarbeite Beleg ${i + 1}/${validFiles.length}: "${file.name}"...`, "info");
         const res = await api.uploadInvoice(file, conversationId, userId);
 
         clearInterval(timerInterval);
@@ -125,12 +133,12 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
 
         const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         const timerEl = document.getElementById("docket-timer");
-        if (timerEl) timerEl.textContent = `COMPLETED IN ${totalElapsed}s`;
+        if (timerEl) timerEl.textContent = `ABGESCHLOSSEN IN ${totalElapsed}s`;
 
         const timings = res.timings || {};
-        const tPre = Number(timings.preprocess_s || 0.2);
-        const tOcr = Number(timings.ocr_s || 2.4);
-        const tStruct = Number(timings.structuring_s || 5.0);
+        const tPre = Number(timings.preprocess_s || 0.1);
+        const tOcr = Number(timings.ocr_s || 0.3);
+        const tStruct = Number(timings.structuring_s || 0.2);
         const tTotal = Number(timings.total_s || totalElapsed);
 
         setStageStatus("stage-received", "completed", `+${tPre.toFixed(1)}s`);
@@ -139,38 +147,34 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
         setStageStatus("stage-validated", "completed", `+${Math.min(tTotal, tPre + tOcr + tStruct + 0.1).toFixed(1)}s`);
         setStageStatus("stage-filed", "completed", `+${tTotal.toFixed(1)}s`);
 
-        showToast(`Filed "${file.name}" in ledger (${tTotal.toFixed(1)}s)`, "success");
+        showToast(`Beleg "${file.name}" extrahiert & geprüft (${tTotal.toFixed(1)}s)`, "success");
         lastRes = res;
         lastFilename = file.name;
-        processedCount++;
 
-        // If batch upload, briefly pause to show docket completion before next
         if (i < validFiles.length - 1) {
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 400));
         }
       } catch (err) {
         clearInterval(timerInterval);
         setIndeterminateProgress(false);
-        showDocketError(err.message || `Failed to process ${file.name}`);
-        showToast(`Error processing "${file.name}": ${err.message}`, "error");
+        showDocketError(err.message || `Fehler bei ${file.name}`);
+        showToast(`Fehler bei "${file.name}": ${err.message}`, "error");
         if (i < validFiles.length - 1) {
-          await new Promise((r) => setTimeout(r, 1200));
+          await new Promise((r) => setTimeout(r, 900));
         }
       }
     }
 
     fileInput.value = "";
 
-    // Refresh ledger data
     if (typeof onUploadSuccess === "function") {
-      onUploadSuccess();
+      await onUploadSuccess();
     }
 
-    // Render structured result after brief visual confirmation
     if (lastRes) {
       setTimeout(() => {
         renderExtractionResult(lastRes, lastFilename);
-      }, 700);
+      }, 450);
     }
   }
 
@@ -197,15 +201,15 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
         stampEl.textContent = "OK \u2713";
       } else if (status === "active") {
         stampEl.className = "docket-stage-stamp stamp-badge pending is-loading";
-        stampEl.innerHTML = `<span class="docket-inline-spinner"></span> IN PROGRESS`;
+        stampEl.innerHTML = `<span class="docket-inline-spinner"></span> AKTIV`;
       } else if (status === "failed") {
         stampEl.className = "docket-stage-stamp stamp-badge failed";
-        stampEl.textContent = "FAILED";
+        stampEl.textContent = "FEHLER";
       } else {
         stampEl.className = "docket-stage-stamp stamp-badge";
         stampEl.style.color = "var(--ink-muted)";
         stampEl.style.borderColor = "var(--hairline)";
-        stampEl.textContent = "PENDING";
+        stampEl.textContent = "WARTEND";
       }
     }
 
@@ -213,7 +217,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
       if (timeText) {
         timeEl.textContent = timeText;
       } else if (status === "active") {
-        timeEl.textContent = "PROCESSING...";
+        timeEl.textContent = "PRÜFUNG...";
       } else {
         timeEl.textContent = "--:--";
       }
@@ -228,11 +232,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
   function setIndeterminateProgress(enable) {
     const fill = document.getElementById("docket-progress-fill");
     if (!fill) return;
-    if (enable) {
-      fill.classList.add("is-indeterminate");
-    } else {
-      fill.classList.remove("is-indeterminate");
-    }
+    fill.classList.toggle("is-indeterminate", Boolean(enable));
   }
 
   function showDocketError(reason) {
@@ -253,6 +253,8 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
     if (!resultCard) return;
 
     const summary = res.invoice_summary || {};
+    lastUploadedDocId = res.doc_id || summary.doc_id || summary.invoice_number || "";
+
     const setText = (id, val) => {
       const el = document.getElementById(id);
       if (el) el.textContent = val || "N/A";
@@ -260,11 +262,18 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
 
     setText("res-filename", filename);
     setText("res-inv-num", summary.invoice_number);
-    const vendorClean = summary.vendor_name ? (typeof summary.vendor_name === 'object' ? (summary.vendor_name.name || "Unknown") : String(summary.vendor_name)) : "Unknown";
-    setText("res-vendor", vendorClean);
-    setText("res-date", summary.invoice_date);
-    setText("res-amount", summary.total_amount ? `₹${Number(summary.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}` : "₹0.00");
-    setText("res-status", summary.payment_status || "Unpaid");
+    setText("res-vendor", summary.vendor_name || "Unbekannt");
+    setText("res-date", formatDateDE(summary.invoice_date));
+    setText("res-amount", formatMoneyDE(summary.total_amount || 0, summary.currency || "EUR"));
+    setText("res-status", summary.payment_status === "Paid" ? "BEZAHLT" : "OFFEN");
+
+    const valEl = document.getElementById("res-validation-status");
+    if (valEl) {
+      const vr = summary.validation_report || {};
+      const st = summary.validation_status || vr.overall_status || "PASS";
+      valEl.textContent = `${st} (${vr.passed_count || 0}/9 OK)`;
+      valEl.style.color = st === "FAIL" ? "var(--stamp-red)" : (st === "WARN" ? "var(--stamp-amber)" : "var(--stamp-green)");
+    }
 
     if (processingDocket) processingDocket.style.display = "none";
     resultCard.style.display = "block";

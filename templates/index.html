@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light">
-  <title>AutoInvoice — Invoice Intelligence Ledger</title>
+  <title>AutoInvoice - Digitale Rechnungsprüfung &amp; DATEV/XRechnung Hauptbuch</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
-  <meta name="description" content="Tactile, editorial financial ledger with rubber-stamped paper invoice aesthetics, RapidOCR, and conversational AI.">
+  <meta name="description" content="Kreditorenbuchhaltung für den deutschen Mittelstand mit 9-Stufen-Prüfung, XRechnung, DATEV SKR03/SKR04 und SEPA pain.001.">
 
   <!-- Google Fonts: Fraunces (Display Serif), Inter (UI Sans), IBM Plex Mono (Tabular Numerals) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,7 +14,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..800;1,9..144,400..700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- Stylesheet -->
-  <link rel="stylesheet" href="/static/css/style.css?v=2.3">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.0">
 
   <!-- Chart.js & Marked.js CDNs -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -23,13 +23,16 @@
 <body>
   <div id="app-root" style="display:none;" inert aria-hidden="true">
 
-    <!-- ─────────────────────────────────────────────────────────────────── -->
-    <!-- Sidebar: Ledger Index Spine -->
-    <!-- ─────────────────────────────────────────────────────────────────── -->
-    <aside class="sidebar">
+    <!-- Mobile Backdrop for Slide-in Drawer (Task 3) -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+    <!-- =================================================================== -->
+    <!-- Sidebar: Collapsible Ledger Index Spine (Task 3)                    -->
+    <!-- =================================================================== -->
+    <aside class="sidebar" id="app-sidebar">
       <div>
         <div class="sidebar-header">
-          <div class="brand-icon">
+          <div class="brand-icon" title="AutoInvoice Deutschland">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
               <polyline points="14 2 14 8 20 8"></polyline>
@@ -40,42 +43,39 @@
           </div>
           <div class="brand-info">
             <h1>AutoInvoice</h1>
-            <span>INVOICE INTELLIGENCE LEDGER</span>
+            <span data-i18n="brand_sub">DATEV &bull; XRECHNUNG</span>
           </div>
+          <button type="button" class="btn-sidebar-toggle" id="btn-sidebar-toggle" title="Seitenleiste ein-/ausklappen">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6" id="sidebar-toggle-chevron"></polyline>
+            </svg>
+          </button>
         </div>
 
         <ul class="nav-menu">
           <li class="nav-item active" data-view="dashboard">
-            <button id="nav-btn-dashboard">
+            <button id="nav-btn-dashboard" title="Übersicht / Dashboard">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <rect x="3" y="3" width="7" height="9" rx="0"></rect>
                 <rect x="14" y="3" width="7" height="5" rx="0"></rect>
                 <rect x="14" y="12" width="7" height="9" rx="0"></rect>
                 <rect x="3" y="16" width="7" height="5" rx="0"></rect>
               </svg>
-              Ledger Overview
-            </button>
-          </li>
-          <li class="nav-item" data-view="chat">
-            <button id="nav-btn-chat">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-              </svg>
-              AI Copilot Memos
+              <span class="nav-label" data-i18n="nav_dashboard">Übersicht</span>
             </button>
           </li>
           <li class="nav-item" data-view="upload">
-            <button id="nav-btn-upload">
+            <button id="nav-btn-upload" title="Rechnungseingang">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
-              Incoming Tray
+              <span class="nav-label" data-i18n="nav_upload">Rechnungseingang</span>
             </button>
           </li>
           <li class="nav-item" data-view="ledger">
-            <button id="nav-btn-ledger">
+            <button id="nav-btn-ledger" title="Belege (Hauptbuch)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <line x1="8" y1="6" x2="21" y2="6"></line>
                 <line x1="8" y1="12" x2="21" y2="12"></line>
@@ -84,7 +84,53 @@
                 <line x1="3" y1="12" x2="3.01" y2="12"></line>
                 <line x1="3" y1="18" x2="3.01" y2="18"></line>
               </svg>
-              General Ledger
+              <span class="nav-label" data-i18n="nav_ledger">Belege</span>
+            </button>
+          </li>
+          <li class="nav-item" data-view="vendors">
+            <button id="nav-btn-vendors" title="Lieferanten &amp; Preisvergleich">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              <span class="nav-label" data-i18n="nav_vendors">Lieferanten</span>
+            </button>
+          </li>
+          <li class="nav-item" data-view="payments">
+            <button id="nav-btn-payments" title="SEPA-Zahllauf (pain.001)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="5" width="20" height="14" rx="1"></rect>
+                <line x1="2" y1="10" x2="22" y2="10"></line>
+              </svg>
+              <span class="nav-label" data-i18n="nav_payments">Zahllauf (SEPA)</span>
+            </button>
+          </li>
+          <li class="nav-item" data-view="monthend">
+            <button id="nav-btn-monthend" title="Monatsabschluss &amp; Umsatzsteuer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="9 11 12 14 22 4"></polyline>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+              </svg>
+              <span class="nav-label" data-i18n="nav_monthend">Monatsabschluss</span>
+            </button>
+          </li>
+          <li class="nav-item" data-view="chat">
+            <button id="nav-btn-chat" title="KI-Assistent (SQL Copilot)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span class="nav-label" data-i18n="nav_chat">KI-Assistent</span>
+            </button>
+          </li>
+          <li class="nav-item" data-view="settings">
+            <button id="nav-btn-settings" title="Einstellungen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+              <span class="nav-label" data-i18n="nav_settings">Einstellungen</span>
             </button>
           </li>
         </ul>
@@ -94,40 +140,50 @@
         <div class="system-status">
           <span style="display:flex; align-items:center; gap:0.5rem;">
             <span class="status-dot" id="health-status-dot"></span>
-            <span id="health-status-text">LEDGER LIVE</span>
+            <span class="nav-label" id="health-status-text">SQLITE AKTIV</span>
           </span>
-          <span>EST. 2026</span>
+          <span class="nav-label" id="sidebar-skr-badge">SKR03</span>
         </div>
       </div>
     </aside>
 
-    <!-- ─────────────────────────────────────────────────────────────────── -->
-    <!-- Main Ledger Viewport -->
-    <!-- ─────────────────────────────────────────────────────────────────── -->
+    <!-- =================================================================== -->
+    <!-- Main Ledger Viewport                                                -->
+    <!-- =================================================================== -->
     <main class="main-wrapper">
 
       <!-- Masthead Header Bar -->
       <header class="top-header">
         <div class="header-left">
+          <button type="button" class="btn-mobile-menu" id="btn-mobile-menu" title="Menü öffnen">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
           <div class="breadcrumb">
-            <span>FOLIO / ARCHIVE</span>
+            <span id="header-company-badge">RHEINWERK ANLAGENBAU AG</span>
             <span style="color:var(--hairline);">&bull;</span>
-            <span class="breadcrumb-active" id="header-breadcrumb-title">LEDGER AUDIT &amp; ANALYTICS</span>
+            <span class="breadcrumb-active" id="header-breadcrumb-title">ÜBERSICHT &amp; LIQUIDITÄT</span>
           </div>
         </div>
 
         <div class="header-right">
+          <button type="button" class="btn-secondary" id="btn-lang-toggle" title="Sprache wechseln (DE / EN)" style="font-family:var(--font-mono); font-size:0.74rem; padding:0.35rem 0.65rem;">
+            DE | EN
+          </button>
           <button class="btn-primary" id="btn-header-upload">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
-            RECEIVE INVOICE
+            <span data-i18n="btn_receive_invoice">BELEG ERFASSEN</span>
           </button>
           <div class="user-badge-container" id="user-badge-container" style="display:none;">
             <span class="user-email-label" id="user-display-email" style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);"></span>
-            <button class="btn-secondary" id="btn-logout" style="font-size:0.72rem; padding:0.35rem 0.65rem; border-color:var(--hairline); text-transform:uppercase;">
-              LOG OUT
+            <button class="btn-secondary" id="btn-logout" style="font-size:0.72rem; padding:0.35rem 0.65rem; border-color:var(--hairline); text-transform:uppercase;" data-i18n="btn_logout">
+              ABMELDEN
             </button>
           </div>
         </div>
@@ -137,10 +193,28 @@
       <div class="content-viewport">
 
         <!-- =============================================================== -->
-        <!-- VIEW 1: DASHBOARD (LEDGER MASTHEAD & ENTRIES) -->
+        <!-- VIEW 1: DASHBOARD (ÜBERSICHT, CASHFLOW, SKONTO, PRÜFSTATUS)     -->
         <!-- =============================================================== -->
         <section id="view-dashboard" class="view-section active">
           <div class="bento-grid">
+
+            <!-- Tier 2: Proactive Alerts Banner (Proaktive Hinweise & Fristen) -->
+            <div class="bento-card" id="dashboard-alerts-card" style="grid-column: span 12; border-left: 4px solid var(--stamp-amber); padding: 1.1rem 1.5rem;">
+              <div class="bento-card-header" style="margin-bottom:0.65rem; padding-bottom:0.45rem;">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                  <span data-i18n="dash_proactive_alerts">PROAKTIVE HINWEISE, FRISTEN &amp; BETRUGSWARNUNGEN</span>
+                </span>
+                <span class="stamp-badge pending" id="dashboard-alerts-count">0 HINWEISE</span>
+              </div>
+              <div id="dashboard-alerts-list" class="alerts-grid">
+                <div style="font-family:var(--font-mono); font-size:0.78rem; color:var(--ink-muted);">Lade aktive Hinweise...</div>
+              </div>
+            </div>
 
             <!-- Tile 1: Hero Total Spend Entry (Spans 6 cols) -->
             <div class="bento-card bento-hero-spend">
@@ -150,16 +224,14 @@
                     <line x1="12" y1="1" x2="12" y2="23"></line>
                     <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
                   </svg>
-                  TOTAL INVOICED VOLUME
+                  <span data-i18n="dash_total_volume">GESAMTES RECHNUNGSVOLUMEN (BRUTTO)</span>
                 </span>
-                <span class="trend-badge">
-                  AUDITED &bull; LIVE
-                </span>
+                <span class="trend-badge" data-i18n="dash_audited_live">GEPRÜFT &bull; SQLITE</span>
               </div>
-              <div class="hero-spend-value" id="stat-total-spend">…</div>
+              <div class="hero-spend-value" id="stat-total-spend">0,00 €</div>
               <div class="hero-spend-meta">
-                <span class="kpi-subtext">AVERAGE VOUCHER: <strong id="stat-avg-spend" style="color:var(--ink);">…</strong></span>
-                <span class="kpi-subtext">CURRENCY: <strong id="kpi-currency-label">INR (₹)</strong></span>
+                <span class="kpi-subtext"><span data-i18n="dash_avg_voucher">Ø BELEGWERT:</span> <strong id="stat-avg-spend" style="color:var(--ink);">0,00 €</strong></span>
+                <span class="kpi-subtext"><span data-i18n="dash_currency">WÄHRUNG:</span> <strong id="kpi-currency-label">EUR (€)</strong></span>
               </div>
             </div>
 
@@ -172,26 +244,97 @@
                     <line x1="8" y1="21" x2="16" y2="21"></line>
                     <line x1="12" y1="17" x2="12" y2="21"></line>
                   </svg>
-                  RECORDED ENTRIES
+                  <span data-i18n="dash_recorded_entries">ERFASSTE BELEGE</span>
                 </span>
               </div>
-              <div class="kpi-value" id="stat-total-count">…</div>
-              <span class="kpi-subtext" id="stat-vendors-count">… ACTIVE VENDORS</span>
+              <div class="kpi-value" id="stat-total-count">0</div>
+              <span class="kpi-subtext" id="stat-vendors-count">0 AKTIVE LIEFERANTEN</span>
             </div>
 
-            <!-- Tile 3: Settlement Ratio Entry (Spans 3 cols) -->
+            <!-- Tile 3: Validation Health KPI (Tier 2, Spans 3 cols) -->
             <div class="bento-card bento-kpi-ratio">
               <div class="bento-card-header">
                 <span class="bento-card-title">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polyline points="12 6 12 12 14 14"></polyline>
+                    <polyline points="20 6 9 17 4 12"></polyline>
                   </svg>
-                  SETTLEMENT RATIO
+                  <span data-i18n="dash_validation_health">PRÜFQUOTE (V1-V8)</span>
                 </span>
               </div>
-              <div class="kpi-value" id="stat-paid-ratio" style="color:var(--stamp-green);">…</div>
-              <span class="kpi-subtext" id="stat-unpaid-count">… OUTSTANDING / DUE</span>
+              <div class="kpi-value" id="stat-validation-health" style="color:var(--stamp-green);">100%</div>
+              <span class="kpi-subtext" id="stat-unpaid-count">0 OFFENE BELEGE</span>
+            </div>
+
+            <!-- Task 8: Cash Flow & Skonto Panel (Spans 7 cols) -->
+            <div class="bento-card" style="grid-column: span 7;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                  </svg>
+                  <span data-i18n="dash_cashflow_skonto">LIQUIDITÄTSVORSCHAU &amp; SKONTO-POTENZIAL</span>
+                </span>
+                <button class="btn-secondary" onclick="switchView('payments')" style="font-size:0.72rem; padding:0.25rem 0.6rem;" data-i18n="btn_open_sepa">
+                  Zum SEPA-Zahllauf &rarr;
+                </button>
+              </div>
+
+              <div class="cashflow-kpi-row">
+                <div class="cashflow-box">
+                  <div class="field-label" data-i18n="cf_due_week">FÄLLIG DIESE WOCHE</div>
+                  <div class="field-value" id="cf-due-week-amount" style="font-size:1.25rem;">0,00 €</div>
+                  <div class="kpi-subtext" id="cf-due-week-count">0 Belege</div>
+                </div>
+                <div class="cashflow-box">
+                  <div class="field-label" data-i18n="cf_due_month">FÄLLIG DIESEN MONAT</div>
+                  <div class="field-value" id="cf-due-month-amount" style="font-size:1.25rem;">0,00 €</div>
+                  <div class="kpi-subtext" id="cf-due-month-count">0 Belege</div>
+                </div>
+                <div class="cashflow-box" style="border-color:var(--stamp-green); background:#EEF8F1;">
+                  <div class="field-label" style="color:var(--stamp-green);" data-i18n="cf_skonto_avail">SKONTO-ERSPARNIS VERFÜGBAR</div>
+                  <div class="field-value" id="cf-skonto-total" style="font-size:1.25rem; color:var(--stamp-green);">0,00 €</div>
+                  <div class="kpi-subtext" id="cf-skonto-count">0 Belege mit Skonto</div>
+                </div>
+              </div>
+
+              <div style="margin-top:0.85rem;">
+                <div class="field-label" style="margin-bottom:0.4rem;" data-i18n="cf_skonto_table_title">SKONTO-FRISTEN &amp; ERSPARNIS PRO RECHNUNG</div>
+                <div class="data-table-wrapper">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th data-i18n="th_inv_no">BELEG #</th>
+                        <th data-i18n="th_vendor">LIEFERANT</th>
+                        <th data-i18n="th_skonto_deadline">SKONTO-FRIST</th>
+                        <th class="th-amount" data-i18n="th_skonto_saving">ERSPARNIS</th>
+                        <th class="th-amount" data-i18n="th_net_payable">ZAHLBETRAG</th>
+                      </tr>
+                    </thead>
+                    <tbody id="dashboard-skonto-table-body">
+                      <tr><td colspan="5" style="text-align:center; padding:1rem; color:var(--ink-muted);">Keine offenen Skonto-Rechnungen.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tier 2: Validation Health & Top Failure Reasons Panel (Spans 5 cols) -->
+            <div class="bento-card" style="grid-column: span 5;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M9 11l3 3L22 4"></path>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                  </svg>
+                  <span data-i18n="dash_val_report_title">VALIDIERUNGSSTATUS &amp; HÄUFIGSTE FEHLERGRÜNDE</span>
+                </span>
+              </div>
+              <div id="dashboard-validation-health-body" style="display:flex; flex-direction:column; gap:0.65rem;">
+                <div style="font-family:var(--font-mono); font-size:0.78rem; color:var(--ink-muted);">Berechne Prüfstatistiken...</div>
+              </div>
             </div>
 
             <!-- Tile 4: Spend Trajectory Chart (Spans 8 cols) -->
@@ -201,16 +344,16 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
                   </svg>
-                  SPEND TRAJECTORY &amp; CASHFLOW
+                  <span data-i18n="dash_spend_trajectory">AUSGABENVERLAUF &amp; ZAHLUNGSSTROM</span>
                 </span>
-                <span class="kpi-subtext">FIGURE 1.0 &bull; INK PLOT</span>
+                <span class="kpi-subtext">ABB. 1.0 &bull; EUR</span>
               </div>
               <div class="chart-container">
                 <canvas id="chart-spend-trend"></canvas>
               </div>
             </div>
 
-            <!-- Tile 5: Settlement Status (Ruled Rows + Stamp Counts) (Spans 4 cols) -->
+            <!-- Tile 5: Settlement Status (Spans 4 cols) -->
             <div class="bento-card bento-chart-donut">
               <div class="bento-card-header">
                 <span class="bento-card-title">
@@ -218,15 +361,13 @@
                     <circle cx="12" cy="12" r="10"></circle>
                     <path d="M12 2a10 10 0 0 1 10 10h-10z"></path>
                   </svg>
-                  SETTLEMENT AUDIT
+                  <span data-i18n="dash_settlement_audit">ZAHLUNGSSTATUS</span>
                 </span>
               </div>
-              <!-- Ruled Rows with Stamped Badges -->
               <div class="donut-legend">
                 <div class="donut-legend-row">
                   <div class="donut-legend-label">
-                    <span class="stamp-badge paid">PAID</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">SETTLED</span>
+                    <span class="stamp-badge paid" data-i18n="status_paid">BEZAHLT</span>
                   </div>
                   <div>
                     <span id="stat-paid-count" style="font-family:var(--font-mono); font-weight:700; margin-right:8px;">0</span>
@@ -235,8 +376,7 @@
                 </div>
                 <div class="donut-legend-row">
                   <div class="donut-legend-label">
-                    <span class="stamp-badge pending">PENDING</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">OUTSTANDING</span>
+                    <span class="stamp-badge pending" data-i18n="status_open">OFFEN</span>
                   </div>
                   <div>
                     <span id="stat-unpaid-ledger-count" style="font-family:var(--font-mono); font-weight:700; margin-right:8px;">0</span>
@@ -245,8 +385,7 @@
                 </div>
                 <div class="donut-legend-row">
                   <div class="donut-legend-label">
-                    <span class="stamp-badge overdue">OVERDUE</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">DELINQUENT</span>
+                    <span class="stamp-badge overdue" data-i18n="status_overdue">ÜBERFÄLLIG</span>
                   </div>
                   <div>
                     <span id="stat-overdue-count" style="font-family:var(--font-mono); font-weight:700; margin-right:8px;">0</span>
@@ -254,7 +393,6 @@
                   </div>
                 </div>
               </div>
-              <!-- Canvas for subtle doughnut indicator -->
               <div class="chart-container" style="min-height: 120px; max-height: 140px; margin-top: 0.5rem;">
                 <canvas id="chart-status-donut"></canvas>
               </div>
@@ -269,25 +407,24 @@
                     <line x1="12" y1="20" x2="12" y2="4"></line>
                     <line x1="6" y1="20" x2="6" y2="14"></line>
                   </svg>
-                  TOP VENDORS BY DISBURSEMENT
+                  <span data-i18n="dash_top_vendors">TOP-LIEFERANTEN NACH UMSATZ</span>
                 </span>
-                <span class="kpi-subtext">SCHEDULE A</span>
+                <span class="kpi-subtext">LISTE A</span>
               </div>
               <div class="data-table-wrapper" style="border-top:none;">
                 <table class="data-table">
                   <thead>
                     <tr>
                       <th style="width: 32px;">#</th>
-                      <th>VENDOR ENTITY</th>
-                      <th class="th-amount">TOTAL DISBURSED</th>
+                      <th data-i18n="th_vendor">LIEFERANT</th>
+                      <th class="th-amount" data-i18n="th_total_gross">BRUTTO GESAMT</th>
                     </tr>
                   </thead>
                   <tbody id="top-vendors-table-body">
-                    <tr><td colspan="3" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Calculating disbursements...</td></tr>
+                    <tr><td colspan="3" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Lade Lieferanten...</td></tr>
                   </tbody>
                 </table>
               </div>
-              <div style="display:none;"><canvas id="chart-vendor-bars"></canvas></div>
             </div>
 
             <!-- Tile 7: Quick Actions Tray (Spans 6 cols) -->
@@ -298,74 +435,33 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
                       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                     </svg>
-                    INTELLIGENCE DISPATCHES
+                    <span data-i18n="dash_quick_actions">SCHNELLAKTIONEN &amp; KI-PRÜFUNG</span>
                   </span>
                 </div>
-                <p style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted); margin-bottom:0.5rem;">
-                  One-touch dispatch to AI Orchestrator tools:
-                </p>
                 <div class="quick-prompt-grid">
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-rank-vendors" data-prompt="Find top 5 sellers by total invoice amount">
-                    <strong>RANK VENDORS</strong>
-                    <span>Extract top 5 sellers by volume</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-rank-vendors" data-prompt="Zeige die Gesamtbeträge und Anzahl der Rechnungen pro Lieferant">
+                    <strong>LIEFERANTEN-SALDEN</strong>
+                    <span>Exakte Summen per SQL berechnen</span>
                   </button>
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-export-unpaid" data-prompt="Generate an Excel report for all unpaid invoices">
-                    <strong>EXPORT UNPAID VOUCHERS</strong>
-                    <span>Compile Excel report</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-val-summary" data-prompt="Zeige den Prüfbericht und alle Validierungsfehler für alle Rechnungen">
+                    <strong>PRÜFBERICHT (V1-V9)</strong>
+                    <span>Abweichungen im Chat auflisten</span>
                   </button>
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-visual-audit" data-prompt="Show a spend breakdown chart across all categories">
-                    <strong>VISUAL AUDIT</strong>
-                    <span>Generate distribution graph</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-export-unpaid" data-prompt="Erstelle einen Excel-Bericht für alle offenen Rechnungen">
+                    <strong>OFFENE POSTEN (EXCEL)</strong>
+                    <span>Excel-Liste generieren</span>
                   </button>
                   <button class="quick-prompt-btn" id="btn-dispatch-file-invoice" type="button">
-                    <strong>FILE NEW INVOICE</strong>
-                    <span>Open incoming OCR intake tray</span>
+                    <strong>NEUEN BELEG HOCHLADEN</strong>
+                    <span>PDF/Scan im Rechnungseingang prüfen</span>
                   </button>
                 </div>
               </div>
               <div style="margin-top:1rem; padding-top:0.6rem; border-top:1px dashed var(--hairline); display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-family:var(--font-mono); font-size:0.72rem; color:var(--ink-muted);">SPECIFIC FINANCIAL INQUIRY?</span>
+                <span style="font-family:var(--font-mono); font-size:0.72rem; color:var(--ink-muted);">FRAGE AN DEN KI-ASSISTENTEN?</span>
                 <button class="btn-secondary" onclick="switchView('chat')">
-                  Open Memo &rarr;
+                  KI-Assistent öffnen &rarr;
                 </button>
-              </div>
-            </div>
-
-            <!-- Pinned Custom Visualizations Folio (Spans 12 cols) -->
-            <div class="bento-card bento-custom-charts-card" id="dashboard-custom-charts-card" style="grid-column: span 12;">
-              <div class="bento-card-header" style="border-bottom: 1px solid var(--hairline); padding-bottom: 0.65rem;">
-                <div style="display: flex; align-items: center; gap: 0.65rem;">
-                  <span class="bento-card-title">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
-                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-                    </svg>
-                    PINNED INTELLIGENCE FOLIO &bull; CUSTOM CHARTS
-                  </span>
-                  <span class="trend-badge" id="custom-charts-count-badge" style="background:var(--paper); border:1px solid var(--hairline); color:var(--ink-muted);">0 PINNED</span>
-                </div>
-                <button class="btn-primary" id="btn-open-custom-chart-modal" onclick="openCustomChartModal()" style="font-size: 0.72rem; padding: 0.35rem 0.75rem; display: flex; align-items: center; gap: 0.35rem;">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                  </svg>
-                  + PIN CUSTOM GRAPH
-                </button>
-
-              </div>
-
-              <!-- Pinned charts grid -->
-              <div id="dashboard-custom-charts-grid" class="custom-charts-grid">
-                <div class="custom-charts-empty-state" id="custom-charts-empty">
-                  <div style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--ink-muted); margin-bottom: 0.35rem;">
-                    [NO CUSTOM GRAPHS PINNED TO LEDGER]
-                  </div>
-                  <p style="font-size: 0.78rem; color: var(--ink-muted); max-width: 480px; margin: 0 auto 0.85rem auto; line-height: 1.4;">
-                    Generate any custom analysis (e.g. major vendors, payment trends, line-item costs) and pin it here. Your custom charts remain permanently saved across sessions.
-                  </p>
-                  <button class="btn-secondary" id="btn-empty-create-chart" style="font-size: 0.72rem; padding: 0.35rem 0.75rem;">
-                    + PIN FIRST GRAPH TO DASHBOARD
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -377,40 +473,500 @@
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                     <polyline points="14 2 14 8 20 8"></polyline>
                   </svg>
-                  RECENT LEDGER RECORDINGS
+                  <span data-i18n="dash_recent_invoices">AKTUELLE BELEGE (KLICK AUF BELEG-NR. ÖFFNET DETAILSEITE)</span>
                 </span>
-                <button class="btn-secondary" onclick="switchView('ledger')" style="font-size:0.76rem; padding:0.35rem 0.75rem;">
-                  Full General Ledger &rarr;
+                <button class="btn-secondary" onclick="switchView('ledger')" style="font-size:0.76rem; padding:0.35rem 0.75rem;" data-i18n="btn_all_invoices">
+                  Alle Belege anzeigen &rarr;
                 </button>
               </div>
               <div class="data-table-wrapper">
                 <table class="data-table">
                   <thead>
                     <tr>
-                      <th>INVOICE #</th>
-                      <th>VENDOR ENTITY</th>
-                      <th>DATE</th>
-                      <th class="th-amount amount-col-header">AMOUNT</th>
-                      <th style="text-align:right;">STATUS</th>
+                      <th data-i18n="th_inv_no">RECHNUNGS-NR.</th>
+                      <th data-i18n="th_vendor">LIEFERANT</th>
+                      <th data-i18n="th_date">BELEGDATUM</th>
+                      <th data-i18n="th_due">FÄLLIGKEIT</th>
+                      <th class="th-amount" data-i18n="th_amount_eur">BETRAG (EUR)</th>
+                      <th style="text-align:center;" data-i18n="th_validation">PRÜFUNG</th>
+                      <th style="text-align:right;" data-i18n="th_status">STATUS</th>
                     </tr>
                   </thead>
                   <tbody id="dashboard-recent-table-body">
-                    <tr><td colspan="5" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Loading recent ledger entries...</td></tr>
+                    <tr><td colspan="7" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Lade Belege...</td></tr>
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            <!-- Pinned Custom Visualizations Folio (Spans 12 cols) -->
+            <div class="bento-card bento-custom-charts-card" id="dashboard-custom-charts-card" style="grid-column: span 12;">
+              <div class="bento-card-header" style="border-bottom: 1px solid var(--hairline); padding-bottom: 0.65rem;">
+                <div style="display: flex; align-items: center; gap: 0.65rem;">
+                  <span class="bento-card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                    </svg>
+                    ANGEHEFTETE DIAGRAMME
+                  </span>
+                  <span class="trend-badge" id="custom-charts-count-badge" style="background:var(--paper); border:1px solid var(--hairline); color:var(--ink-muted);">0 ANGEHEFTET</span>
+                </div>
+                <button class="btn-primary" id="btn-open-custom-chart-modal" onclick="openCustomChartModal()" style="font-size: 0.72rem; padding: 0.35rem 0.75rem;">
+                  + DIAGRAMM ANHEFTEN
+                </button>
+              </div>
+              <div id="dashboard-custom-charts-grid" class="custom-charts-grid"></div>
             </div>
 
           </div>
         </section>
 
         <!-- =============================================================== -->
-        <!-- VIEW 2: AI COPILOT (CHAT ON PAPER) -->
+        <!-- VIEW 2: UPLOAD CENTER (RECHNUNGSEINGANG)                        -->
+        <!-- =============================================================== -->
+        <section id="view-upload" class="view-section">
+          <div class="upload-center-container">
+            <div class="dropzone-card" id="dropzone-card">
+              <input type="file" id="file-input-upload" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" multiple>
+              <div class="incoming-stamp">[ RECHNUNGSEINGANG ]</div>
+              <h2 class="dropzone-title" data-i18n="upload_title">Rechnungsbeleg zur Prüfung ablegen</h2>
+              <p class="dropzone-subtitle">PDF (DIGITAL ODER SCAN), PNG, JPG, TIFF &bull; AUTOMATISCHE 9-STUFEN-PRÜFUNG &amp; VIES-CHECK</p>
+              <button class="btn-primary" style="margin:0 auto; pointer-events:none;" data-i18n="upload_btn_select">
+                BELEG AUSWÄHLEN
+              </button>
+            </div>
+
+            <div class="processing-docket" id="processing-docket">
+              <div class="docket-header">
+                <div>
+                  <div class="docket-title">BELEGVERARBEITUNG &amp; PRÜFPROTOKOLL</div>
+                  <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">
+                    DATEI: <strong id="docket-file-name" style="color:var(--ink);">file.pdf</strong>
+                  </div>
+                </div>
+                <div class="docket-timer" id="docket-timer">DAUER: 0.0s</div>
+              </div>
+
+              <div class="ink-progress-bar-bg">
+                <div class="ink-progress-bar-fill" id="docket-progress-fill"></div>
+              </div>
+
+              <ul class="docket-stage-list">
+                <li class="docket-stage-row" id="stage-received">
+                  <div class="docket-stage-name"><span style="font-family:var(--font-mono); color:var(--ink-muted);">01.</span><span>Belegannahme &amp; Vorverarbeitung</span></div>
+                  <div class="docket-stage-status"><span class="docket-stage-time">--:--</span><span class="docket-stage-stamp stamp-badge">WARTEND</span></div>
+                </li>
+                <li class="docket-stage-row" id="stage-ocr">
+                  <div class="docket-stage-name"><span style="font-family:var(--font-mono); color:var(--ink-muted);">02.</span><span>Texterkennung (PDF-Fast-Path / OCR)</span></div>
+                  <div class="docket-stage-status"><span class="docket-stage-time">--:--</span><span class="docket-stage-stamp stamp-badge">WARTEND</span></div>
+                </li>
+                <li class="docket-stage-row" id="stage-extracted">
+                  <div class="docket-stage-name"><span style="font-family:var(--font-mono); color:var(--ink-muted);">03.</span><span>Strukturierung (§ 14 UStG, Skonto, Positionen)</span></div>
+                  <div class="docket-stage-status"><span class="docket-stage-time">--:--</span><span class="docket-stage-stamp stamp-badge">WARTEND</span></div>
+                </li>
+                <li class="docket-stage-row" id="stage-validated">
+                  <div class="docket-stage-name"><span style="font-family:var(--font-mono); color:var(--ink-muted);">04.</span><span>9-Stufen-Prüfung (V1-V9) &amp; EU VIES Check</span></div>
+                  <div class="docket-stage-status"><span class="docket-stage-time">--:--</span><span class="docket-stage-stamp stamp-badge">WARTEND</span></div>
+                </li>
+                <li class="docket-stage-row" id="stage-filed">
+                  <div class="docket-stage-name"><span style="font-family:var(--font-mono); color:var(--ink-muted);">05.</span><span>Speicherung in SQLite &amp; FTS5-Index</span></div>
+                  <div class="docket-stage-status"><span class="docket-stage-time">--:--</span><span class="docket-stage-stamp stamp-badge">WARTEND</span></div>
+                </li>
+              </ul>
+
+              <div id="docket-error-box" style="display:none; margin-top:1rem; padding:0.75rem; background:rgba(181,52,42,0.06); border:1px solid var(--stamp-red);">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.3rem;">
+                  <span class="stamp-badge failed">FEHLER</span>
+                  <span style="font-family:var(--font-mono); font-size:0.75rem; font-weight:700; color:var(--stamp-red);">VERARBEITUNG UNTERBROCHEN</span>
+                </div>
+                <div id="docket-error-msg" style="font-family:var(--font-mono); font-size:0.76rem; color:var(--ink);"></div>
+              </div>
+            </div>
+
+            <div class="extraction-result-card" id="extraction-result-card">
+              <div class="extraction-header">
+                <div>
+                  <span class="stamp-badge paid" style="margin-bottom:0.4rem;">IM HAUPTBUCH ERFASST</span>
+                  <h3 style="font-family:var(--font-serif); font-size:1.3rem; color:var(--ink);">Beleg erfolgreich extrahiert &amp; geprüft</h3>
+                  <span id="res-filename" style="font-family:var(--font-mono); font-size:0.78rem; color:var(--ink-muted);">invoice.pdf</span>
+                </div>
+                <div style="display:flex; gap:0.75rem;">
+                  <button class="btn-secondary" id="btn-upload-another">Weiteren Beleg erfassen</button>
+                  <button class="btn-primary" id="btn-open-uploaded-detail">Belegdetails &amp; XRechnung öffnen &rarr;</button>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <div class="field-item">
+                  <div class="field-label">RECHNUNGSNUMMER</div>
+                  <div class="field-value" id="res-inv-num">N/A</div>
+                </div>
+                <div class="field-item">
+                  <div class="field-label">LIEFERANT</div>
+                  <div class="field-value" id="res-vendor">Unbekannt</div>
+                </div>
+                <div class="field-item">
+                  <div class="field-label">BRUTTOBETRAG</div>
+                  <div class="field-value" id="res-amount">0,00 €</div>
+                </div>
+                <div class="field-item">
+                  <div class="field-label">BELEGDATUM</div>
+                  <div class="field-value" id="res-date">N/A</div>
+                </div>
+                <div class="field-item">
+                  <div class="field-label">ZAHLUNGSSTATUS</div>
+                  <div class="field-value" id="res-status">OFFEN</div>
+                </div>
+                <div class="field-item">
+                  <div class="field-label">PRÜFBERICHT (V1-V9)</div>
+                  <div class="field-value" id="res-validation-status" style="color:var(--stamp-green);">GEPRÜFT</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 3: INVOICES LEDGER (BELEGE)                                -->
+        <!-- =============================================================== -->
+        <section id="view-ledger" class="view-section">
+          <div class="ledger-container">
+            <div class="ledger-controls">
+              <div class="search-input-wrapper">
+                <svg class="search-icon-pos" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="ledger-search-input" placeholder="FTS5-Volltextsuche: Rechnungs-Nr., Lieferant, Artikel...">
+              </div>
+
+              <div style="display:flex; align-items:flex-end; gap:1.25rem; flex-wrap:wrap;">
+                <div class="filter-pills">
+                  <button class="filter-pill active" data-filter="all" data-i18n="filter_all">ALLE BELEGE</button>
+                  <button class="filter-pill" data-filter="unpaid" data-i18n="filter_open">OFFEN</button>
+                  <button class="filter-pill" data-filter="paid" data-i18n="filter_paid">BEZAHLT</button>
+                  <button class="filter-pill" data-filter="failed" data-i18n="filter_failed">PRÜFFEHLER</button>
+                </div>
+                <span id="ledger-filtered-count" style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted); margin-bottom:6px;">
+                  0 BELEGE
+                </span>
+              </div>
+            </div>
+
+            <div class="data-table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th_inv_no">RECHNUNGS-NR.</th>
+                    <th data-i18n="th_vendor">LIEFERANT</th>
+                    <th data-i18n="th_vat_id">UST-IDNR.</th>
+                    <th data-i18n="th_date">BELEGDATUM</th>
+                    <th data-i18n="th_due">FÄLLIGKEIT</th>
+                    <th class="th-amount" data-i18n="th_net">NETTO</th>
+                    <th class="th-amount" data-i18n="th_vat">UST</th>
+                    <th class="th-amount" data-i18n="th_gross">BRUTTO</th>
+                    <th style="text-align:center;" data-i18n="th_validation">PRÜFUNG</th>
+                    <th style="text-align:center;" data-i18n="th_status">STATUS</th>
+                    <th style="text-align:right;" data-i18n="th_action">AKTION</th>
+                  </tr>
+                </thead>
+                <tbody id="ledger-table-body">
+                  <tr><td colspan="11" style="text-align:center; padding:3rem; color:var(--ink-muted);">Lade Belege...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 4: PER-INVOICE DETAIL PAGE (TASK 4, 5, 6, 9, 11)           -->
+        <!-- =============================================================== -->
+        <section id="view-invoice-detail" class="view-section">
+          <div class="ledger-container" id="invoice-detail-container">
+            <div style="text-align:center; padding:2rem; font-family:var(--font-mono); color:var(--ink-muted);">
+              Bitte wählen Sie einen Beleg aus der Liste aus.
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 5: VENDORS & ITEM PRICE COMPARISON (TASK 7, 11 & TIER 2)   -->
+        <!-- =============================================================== -->
+        <section id="view-vendors" class="view-section">
+          <div class="bento-grid">
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                  </svg>
+                  <span data-i18n="vendors_title">LIEFERANTENVERZEICHNIS (KLICK ZEIGT ALLE BELEGE DES LIEFERANTEN)</span>
+                </span>
+                <span class="kpi-subtext" id="vendors-summary-count">0 LIEFERANTEN</span>
+              </div>
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="th_vendor">LIEFERANT</th>
+                      <th data-i18n="th_vat_id">UST-IDNR. &amp; VIES</th>
+                      <th>IBAN &amp; BETRUGSSCHUTZ</th>
+                      <th data-i18n="th_payment_terms">ZAHLUNGSZIEL</th>
+                      <th style="text-align:center;">BELEGE</th>
+                      <th class="th-amount">Ø BELEGWERT</th>
+                      <th class="th-amount">GESAMTUMSATZ</th>
+                      <th style="text-align:center;">PRÜFQUOTE (TIER 2)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="vendors-table-body">
+                    <tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--ink-muted);">Lade Lieferanten...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Selected Vendor Invoices Drilldown -->
+              <div id="vendor-drilldown-panel" style="display:none; margin-top:1.25rem; padding:1rem; background:var(--paper); border:1px solid var(--ink);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; border-bottom:1px solid var(--hairline); padding-bottom:0.5rem;">
+                  <div>
+                    <strong style="font-family:var(--font-serif); font-size:1.05rem;" id="vendor-drilldown-title">Belege des Lieferanten</strong>
+                    <span style="font-family:var(--font-mono); font-size:0.74rem; color:var(--ink-muted); margin-left:0.75rem;" id="vendor-drilldown-iban"></span>
+                  </div>
+                  <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input type="text" id="vendor-edit-iban-input" class="auth-input" style="padding:0.3rem 0.6rem; font-size:0.76rem; font-family:var(--font-mono); width:240px;" placeholder="Gespeicherte Lieferanten-IBAN">
+                    <button type="button" class="btn-secondary" id="btn-save-vendor-iban" style="padding:0.3rem 0.65rem; font-size:0.72rem;">Stamm-IBAN speichern</button>
+                  </div>
+                </div>
+                <div class="data-table-wrapper">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>BELEG #</th>
+                        <th>ART</th>
+                        <th>DATUM</th>
+                        <th>FÄLLIGKEIT</th>
+                        <th>IBAN AUF BELEG</th>
+                        <th class="th-amount">NETTO</th>
+                        <th class="th-amount">BRUTTO</th>
+                        <th style="text-align:center;">PRÜFUNG</th>
+                        <th style="text-align:right;">STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody id="vendor-drilldown-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Price Comparison Panel (Task 7) -->
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                  </svg>
+                  <span data-i18n="vendors_price_comparison">ARTIKEL-PREISVERGLEICH (EINZELPREISE NEBENEINANDER, GÜNSTIGSTER MARKIERT)</span>
+                </span>
+                <div style="width:280px;">
+                  <input type="text" id="price-comparison-search" class="auth-input" style="padding:0.35rem 0.65rem; font-size:0.78rem;" placeholder="Artikel-Nr. oder Bezeichnung filtern...">
+                </div>
+              </div>
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>ART.-NR. &amp; BEZEICHNUNG</th>
+                      <th>LIEFERANT &amp; BELEG</th>
+                      <th>DATUM</th>
+                      <th class="th-amount">EINZELPREIS</th>
+                      <th style="text-align:center;">PE / EINH.</th>
+                      <th class="th-amount">EFFEKTIVPREIS JE 1 EINH.</th>
+                      <th style="text-align:right;">BEWERTUNG</th>
+                    </tr>
+                  </thead>
+                  <tbody id="price-comparison-tbody">
+                    <tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--ink-muted);">Lade Preisvergleich...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 6: SEPA PAYMENT RUN (ZAHLLAUF pain.001.001.03 - TASK 10)   -->
+        <!-- =============================================================== -->
+        <section id="view-payments" class="view-section">
+          <div class="bento-grid">
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <rect x="2" y="5" width="20" height="14" rx="1"></rect>
+                    <line x1="2" y1="10" x2="22" y2="10"></line>
+                  </svg>
+                  <span data-i18n="sepa_title">SEPA-ZAHLLAUF (PAIN.001.001.03 DEUTSCHER DK-STANDARD)</span>
+                </span>
+                <div style="display:flex; gap:0.75rem; align-items:center;">
+                  <label style="font-family:var(--font-mono); font-size:0.75rem; display:flex; align-items:center; gap:0.35rem; cursor:pointer;">
+                    <input type="checkbox" id="sepa-apply-skonto">
+                    <span>Verfügbaren Skontoabzug anwenden</span>
+                  </label>
+                  <button type="button" class="btn-primary" id="btn-sepa-preview">
+                    AUSWAHL PRÜFEN &amp; FREIGABE VORBEREITEN
+                  </button>
+                </div>
+              </div>
+
+              <p style="font-family:var(--font-mono); font-size:0.76rem; color:var(--ink-muted); margin-bottom:0.85rem;">
+                Wählen Sie fällige Rechnungen für den SEPA-Sammelüberweisungslauf aus. Jede IBAN wird per Modulo-97-Prüfziffer validiert; eine fehlerhafte IBAN blockiert nur die einzelne Zahlung, niemals den gesamten Zahllauf.
+              </p>
+
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th style="width:36px;"><input type="checkbox" id="sepa-select-all" checked></th>
+                      <th>RECHNUNGS-NR.</th>
+                      <th>LIEFERANT</th>
+                      <th>FÄLLIGKEIT</th>
+                      <th>KREDITOREN-IBAN &amp; BIC</th>
+                      <th style="text-align:center;">PRÜFSTATUS</th>
+                      <th class="th-amount">BRUTTOBETRAG</th>
+                      <th class="th-amount">SKONTO</th>
+                    </tr>
+                  </thead>
+                  <tbody id="sepa-candidates-tbody">
+                    <tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--ink-muted);">Lade offene Rechnungen...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Human Approval Preview Box -->
+              <div id="sepa-approval-panel" style="display:none; margin-top:1.25rem; padding:1.25rem; background:#FBF4E6; border:2px solid var(--ink); box-shadow:var(--shadow-offset);">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--ink); padding-bottom:0.65rem; margin-bottom:0.85rem;">
+                  <div>
+                    <span class="stamp-badge pending">MENSCHLICHE FREIGABE ERFORDERLICH</span>
+                    <h3 style="font-family:var(--font-serif); font-size:1.15rem; margin-top:0.35rem;">SEPA pain.001.001.03 Zahllauf-Prüfung</h3>
+                  </div>
+                  <div style="text-align:right; font-family:var(--font-mono);">
+                    <div style="font-size:0.72rem; color:var(--ink-muted);">KONTROLLSUMME (CTRLSUM)</div>
+                    <div style="font-size:1.4rem; font-weight:700;" id="sepa-preview-total">0,00 €</div>
+                  </div>
+                </div>
+                <div id="sepa-preview-details" style="font-family:var(--font-mono); font-size:0.78rem; margin-bottom:1rem;"></div>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                  <button type="button" class="btn-secondary" id="btn-sepa-cancel-preview">ABBRECHEN</button>
+                  <button type="button" class="btn-primary" id="btn-sepa-confirm-execute" style="background:var(--stamp-green); border-color:var(--stamp-green);">
+                    ZAHLLAUF VERBINDLICH FREIGEBEN &amp; PAIN.001 XML ERZEUGEN
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- SEPA Audit Trail (Task 10) -->
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                  </svg>
+                  <span data-i18n="sepa_audit_trail">ZAHLLAUF-PRÜFPFAD (AUDIT TRAIL: WELCHE DATEI WELCHE RECHNUNGEN BEZAHLT HAT)</span>
+                </span>
+              </div>
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>MESSAGE-ID / RUN-ID</th>
+                      <th>ERSTELLT AM</th>
+                      <th>FREIGEGEBEN DURCH</th>
+                      <th style="text-align:center;">TRANSAKTIONEN</th>
+                      <th class="th-amount">KONTROLLSUMME</th>
+                      <th>BEZAHLTE RECHNUNGEN</th>
+                      <th style="text-align:right;">PAIN.001 XML</th>
+                    </tr>
+                  </thead>
+                  <tbody id="sepa-runs-tbody">
+                    <tr><td colspan="7" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Noch keine Zahlläufe durchgeführt.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 7: MONTH-END CHECKLIST & TAX SUMMARY (TIER 2)              -->
+        <!-- =============================================================== -->
+        <section id="view-monthend" class="view-section">
+          <div class="bento-grid">
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                  </svg>
+                  <span data-i18n="monthend_tax_title">STEUERÜBERSICHT &amp; UMSATZSTEUER NACH STEUERSATZ (19%, 7%, 0%) FÜR DEN STEUERBERATER</span>
+                </span>
+                <div style="display:flex; gap:0.65rem; align-items:center;">
+                  <select id="monthend-month-select" class="auth-input" style="padding:0.35rem 0.65rem; font-family:var(--font-mono); font-size:0.76rem; width:170px;">
+                    <option value="all">Alle Monate</option>
+                    <option value="2026-10">Oktober 2026</option>
+                    <option value="2026-11">November 2026</option>
+                  </select>
+                  <a id="btn-datev-csv-export" href="/api/datev/export?month=all" class="btn-primary" style="text-decoration:none; font-size:0.75rem; padding:0.4rem 0.85rem;">
+                    DATEV BUCHUNGSSTAPEL (CSV) EXPORTIEREN
+                  </a>
+                </div>
+              </div>
+
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>STEUERSATZ (UST %)</th>
+                      <th>DATEV VORSTEUERKONTO</th>
+                      <th>DATEV AUFWANDSKONTO</th>
+                      <th style="text-align:center;">BELEGE</th>
+                      <th class="th-amount">NETTOGESAMT (BEMESSUNGSGRUNDLAGE)</th>
+                      <th class="th-amount">VORSTEUER / UST GESAMT</th>
+                      <th class="th-amount">BRUTTOGESAMT</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tax-summary-tbody">
+                    <tr><td colspan="7" style="text-align:center; padding:1.5rem; color:var(--ink-muted);">Berechne Umsatzsteuer-Übersicht...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Month-End Bookkeeper Checklist (Tier 2) -->
+            <div class="bento-card" style="grid-column: span 12;">
+              <div class="bento-card-header">
+                <span class="bento-card-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <polyline points="9 11 12 14 22 4"></polyline>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                  </svg>
+                  <span data-i18n="monthend_checklist_title">MONATSABSCHLUSS-CHECKLISTE FÜR DIE BUCHHALTUNG</span>
+                </span>
+                <span class="kpi-subtext" id="monthend-progress-badge">0 OFFENE PUNKTE</span>
+              </div>
+              <div id="monthend-checklist-container" class="checklist-sections-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================================== -->
+        <!-- VIEW 8: AI COPILOT (KI-ASSISTENT - SQL ONLY + CITATIONS)        -->
         <!-- =============================================================== -->
         <section id="view-chat" class="view-section">
           <div class="chat-workspace">
-
-            <!-- Sidebar: Conversation Memos -->
             <div class="chat-conversations-sidebar">
               <div class="chat-sidebar-header">
                 <button class="btn-primary" id="btn-new-chat" style="width:100%; justify-content:center;">
@@ -418,30 +974,28 @@
                     <line x1="12" y1="5" x2="12" y2="19"></line>
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                   </svg>
-                  NEW MEMO SESSION
+                  <span data-i18n="chat_new_session">NEUE SITZUNG</span>
                 </button>
               </div>
               <ul class="chat-conv-list" id="chat-conversations-list">
                 <li style="padding:1.5rem 1rem; text-align:center; color:var(--ink-muted); font-family:var(--font-mono); font-size:0.75rem;">
-                  [ LOADING ARCHIVES... ]
+                  [ LADE SITZUNGEN... ]
                 </li>
               </ul>
             </div>
 
-            <!-- Main Chat Workspace -->
             <div class="chat-main-panel">
               <div class="chat-messages-container" id="chat-messages">
                 <div class="chat-msg assistant">
-                  <div class="chat-avatar">AI</div>
+                  <div class="chat-avatar">KI</div>
                   <div class="msg-body">
-                    <p><strong>MEMO &bull; AI COPILOT INITIALIZED</strong></p>
-                    <p>I have direct ledger access to all recorded invoices, RapidOCR extraction tools, Excel schedule generators, and financial analysis agents.</p>
-                    <p>You may submit inquiries regarding vendors and cashflow, or attach an invoice file below for ad-hoc inspection.</p>
+                    <p><strong>MEMO &bull; KI-ASSISTENT (SQL &amp; FTS5) BEREIT</strong></p>
+                    <p>Ich beantworte Fragen ausschließlich über SQL- und FTS5-Volltextabfragen auf Ihrer SQLite-Datenbank. Alle Summen, Durchschnitte und Preisvergleiche werden exakt in Python über <code>invoice_aggregate</code> berechnet.</p>
+                    <p>Jede genannte Zahl verlinkt direkt auf den zugehörigen Beleg. Sie können mich auch bitten, Rechnungen für DATEV vorzubereiten oder als bezahlt zu markieren (mit menschlicher Freigabe).</p>
                   </div>
                 </div>
               </div>
 
-              <!-- Chat Input Tray -->
               <div class="chat-input-bar">
                 <div class="chat-attachment-preview" id="chat-attachment-preview" style="display:none;">
                   <span id="chat-attachment-name">invoice.pdf</span>
@@ -450,16 +1004,14 @@
 
                 <div class="chat-input-wrapper">
                   <div class="chat-input-row">
-                    <button class="btn-chat-attach" id="btn-chat-attach" title="Attach invoice voucher (PDF/Image)">
+                    <button class="btn-chat-attach" id="btn-chat-attach" title="Beleg anhängen (PDF/Bild)">
                       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75">
                         <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
                       </svg>
                     </button>
                     <input type="file" id="file-input-chat" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff">
-
-                    <textarea id="chat-textarea" class="chat-textarea" rows="1" placeholder="Type instructions or inquiry... (Enter to send, Shift+Enter for newline)"></textarea>
-
-                    <button class="btn-chat-send" id="btn-chat-send" title="Dispatch memo">
+                    <textarea id="chat-textarea" class="chat-textarea" rows="1" placeholder="Frage stellen (z.B. 'Wie hoch ist die Gesamtsumme?', 'Prüfbericht für RE-2026-10457', 'Preisvergleich für Rillenkugellager')..."></textarea>
+                    <button class="btn-chat-send" id="btn-chat-send" title="Senden">
                       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
                         <line x1="22" y1="2" x2="11" y2="13"></line>
                         <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -468,203 +1020,113 @@
                   </div>
                 </div>
               </div>
-
             </div>
           </div>
         </section>
 
         <!-- =============================================================== -->
-        <!-- VIEW 3: UPLOAD CENTER (INCOMING TRAY & PROGRESS DOCKET) -->
+        <!-- VIEW 9: SETTINGS PAGE (EINSTELLUNGEN - TASK 2 & TASK 12)        -->
         <!-- =============================================================== -->
-        <section id="view-upload" class="view-section">
-          <div class="upload-center-container">
-
-            <!-- Perforated Incoming Tray -->
-            <div class="dropzone-card" id="dropzone-card">
-              <input type="file" id="file-input-upload" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" multiple>
-              <div class="incoming-stamp">[ INCOMING TRAY ]</div>
-              <h2 class="dropzone-title">Deposit invoice document for filing</h2>
-              <p class="dropzone-subtitle">PERFORATED INTAKE &bull; PDF, PNG, JPG, JPEG, BMP, TIFF &bull; MAX 20 MB</p>
-              <button class="btn-primary" style="margin:0 auto; pointer-events:none;">
-                SELECT DOCUMENT
-              </button>
-            </div>
-
-            <!-- Receipt-Style Processing Docket -->
-            <div class="processing-docket" id="processing-docket">
-              <div class="docket-header">
-                <div>
-                  <div class="docket-title">INVOICE PROCESSING DOCKET</div>
-                  <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted);">
-                    DOCUMENT: <strong id="docket-file-name" style="color:var(--ink);">file.pdf</strong>
-                  </div>
-                </div>
-                <div class="docket-timer" id="docket-timer">ELAPSED: 0.0s</div>
-              </div>
-
-              <!-- Thin Ink Progress Bar -->
-              <div class="ink-progress-bar-bg">
-                <div class="ink-progress-bar-fill" id="docket-progress-fill"></div>
-              </div>
-
-              <!-- Stage Checklist -->
-              <ul class="docket-stage-list">
-                <li class="docket-stage-row" id="stage-received">
-                  <div class="docket-stage-name">
-                    <span style="font-family:var(--font-mono); color:var(--ink-muted);">01.</span>
-                    <span>Reading your invoice</span>
-                  </div>
-                  <div class="docket-stage-status">
-                    <span class="docket-stage-time">--:--</span>
-                    <span class="docket-stage-stamp stamp-badge">PENDING</span>
-                  </div>
-                </li>
-                <li class="docket-stage-row" id="stage-ocr">
-                  <div class="docket-stage-name">
-                    <span style="font-family:var(--font-mono); color:var(--ink-muted);">02.</span>
-                    <span>Reading the text</span>
-                  </div>
-                  <div class="docket-stage-status">
-                    <span class="docket-stage-time">--:--</span>
-                    <span class="docket-stage-stamp stamp-badge">PENDING</span>
-                  </div>
-                </li>
-                <li class="docket-stage-row" id="stage-extracted">
-                  <div class="docket-stage-name">
-                    <span style="font-family:var(--font-mono); color:var(--ink-muted);">03.</span>
-                    <span>Understanding the details</span>
-                  </div>
-                  <div class="docket-stage-status">
-                    <span class="docket-stage-time">--:--</span>
-                    <span class="docket-stage-stamp stamp-badge">PENDING</span>
-                  </div>
-                </li>
-                <li class="docket-stage-row" id="stage-validated">
-                  <div class="docket-stage-name">
-                    <span style="font-family:var(--font-mono); color:var(--ink-muted);">04.</span>
-                    <span>Checking the totals</span>
-                  </div>
-                  <div class="docket-stage-status">
-                    <span class="docket-stage-time">--:--</span>
-                    <span class="docket-stage-stamp stamp-badge">PENDING</span>
-                  </div>
-                </li>
-                <li class="docket-stage-row" id="stage-filed">
-                  <div class="docket-stage-name">
-                    <span style="font-family:var(--font-mono); color:var(--ink-muted);">05.</span>
-                    <span>Saving to your ledger</span>
-                  </div>
-                  <div class="docket-stage-status">
-                    <span class="docket-stage-time">--:--</span>
-                    <span class="docket-stage-stamp stamp-badge">PENDING</span>
-                  </div>
-                </li>
-              </ul>
-
-              <!-- Error Box if Failed -->
-              <div id="docket-error-box" style="display:none; margin-top:1rem; padding:0.75rem; background:rgba(181,52,42,0.06); border:1px solid var(--stamp-red);">
-                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.3rem;">
-                  <span class="stamp-badge failed">FAILED</span>
-                  <span style="font-family:var(--font-mono); font-size:0.75rem; font-weight:700; color:var(--stamp-red);">PROCESSING INTERRUPTED</span>
-                </div>
-                <div id="docket-error-msg" style="font-family:var(--font-mono); font-size:0.76rem; color:var(--ink);"></div>
-              </div>
-            </div>
-
-            <!-- Structured Result Receipt -->
-            <div class="extraction-result-card" id="extraction-result-card">
-              <div class="extraction-header">
-                <div>
-                  <span class="stamp-badge paid" style="margin-bottom:0.4rem;">FILED IN ARCHIVE</span>
-                  <h3 style="font-family:var(--font-serif); font-size:1.3rem; color:var(--ink);">Invoice Filed Successfully</h3>
-                  <span id="res-filename" style="font-family:var(--font-mono); font-size:0.78rem; color:var(--ink-muted);">invoice_001.pdf</span>
-                </div>
-                <div style="display:flex; gap:0.75rem;">
-                  <button class="btn-secondary" id="btn-upload-another">Deposit Another</button>
-                  <button class="btn-primary" onclick="switchView('dashboard')">View in Ledger</button>
-                </div>
-              </div>
-
-              <div class="field-grid">
-                <div class="field-item">
-                  <div class="field-label">INVOICE NUMBER</div>
-                  <div class="field-value" id="res-inv-num">N/A</div>
-                </div>
-                <div class="field-item">
-                  <div class="field-label">VENDOR ENTITY</div>
-                  <div class="field-value" id="res-vendor">Unknown</div>
-                </div>
-                <div class="field-item">
-                  <div class="field-label">TOTAL DISBURSED</div>
-                  <div class="field-value" id="res-amount">₹0.00</div>
-                </div>
-                <div class="field-item">
-                  <div class="field-label">DATE ISSUED</div>
-                  <div class="field-value" id="res-date">N/A</div>
-                </div>
-                <div class="field-item">
-                  <div class="field-label">SETTLEMENT STATUS</div>
-                  <div class="field-value" id="res-status">Unpaid</div>
-                </div>
-                <div class="field-item">
-                  <div class="field-label">VECTOR INDEX STATUS</div>
-                  <div class="field-value" style="color:var(--stamp-green);">SYNCHRONIZED</div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </section>
-
-        <!-- =============================================================== -->
-        <!-- VIEW 4: INVOICES LEDGER (THE HERO SCREEN) -->
-        <!-- =============================================================== -->
-        <section id="view-ledger" class="view-section">
-          <div class="ledger-container">
-
-            <!-- Ledger Binder Index Tabs -->
-            <div class="ledger-controls">
-              <div class="search-input-wrapper">
-                <svg class="search-icon-pos" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        <section id="view-settings" class="view-section">
+          <div class="ledger-container" style="max-width:960px;">
+            <div class="bento-card-header" style="margin-bottom:1.25rem;">
+              <span class="bento-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4"></path>
                 </svg>
-                <input type="text" id="ledger-search-input" placeholder="Search by invoice #, vendor, or customer...">
-              </div>
+                <span data-i18n="settings_title">UNTERNEHMENSPROFIL, DATEV-KONTENRAHMEN &amp; GEBIETSSCHEMA (LOCALE)</span>
+              </span>
+              <span class="stamp-badge paid">MANDANT AKTIV</span>
+            </div>
 
-              <div style="display:flex; align-items:flex-end; gap:1.25rem;">
-                <div class="filter-pills">
-                  <button class="filter-pill active" data-filter="all">ALL ENTRIES</button>
-                  <button class="filter-pill" data-filter="paid">PAID</button>
-                  <button class="filter-pill" data-filter="unpaid">PENDING</button>
-                  <button class="filter-pill" data-filter="overdue">OVERDUE</button>
+            <form id="form-settings" class="settings-form-grid">
+              <div class="settings-section-block">
+                <h3 class="settings-section-heading" data-i18n="settings_company_hdr">1. Unternehmensprofil &amp; SEPA-Debitor</h3>
+                <div class="field-grid" style="grid-template-columns: repeat(2, 1fr);">
+                  <div class="auth-form-group">
+                    <label for="setting-company-name" data-i18n="lbl_company_name">Firmenname (Rechnungsempfänger)</label>
+                    <input type="text" id="setting-company-name" class="auth-input" value="Rheinwerk Anlagenbau AG" required>
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-company-address" data-i18n="lbl_company_address">Anschrift</label>
+                    <input type="text" id="setting-company-address" class="auth-input" value="Hafenstraße 88, 47119 Duisburg" required>
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-vat-id" data-i18n="lbl_company_vat">USt-IdNr. (DE + 9 Ziffern)</label>
+                    <input type="text" id="setting-vat-id" class="auth-input" value="DE119283746" required style="font-family:var(--font-mono);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-tax-number">Steuernummer</label>
+                    <input type="text" id="setting-tax-number" class="auth-input" value="109/5720/1842" style="font-family:var(--font-mono);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-iban">Debitor-IBAN (für SEPA pain.001)</label>
+                    <input type="text" id="setting-iban" class="auth-input" value="DE89 3704 0044 0532 0130 00" required style="font-family:var(--font-mono);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-bic">Debitor-BIC (für SEPA pain.001)</label>
+                    <input type="text" id="setting-bic" class="auth-input" value="COBADEFFXXX" required style="font-family:var(--font-mono);">
+                  </div>
+                  <div class="auth-form-group" style="grid-column: span 2;">
+                    <label for="setting-leitweg-id">Standard-Leitweg-ID (BT-10 Vorbelegung für XRechnung)</label>
+                    <input type="text" id="setting-leitweg-id" class="auth-input" value="04011000-1234512345-06" style="font-family:var(--font-mono);">
+                  </div>
                 </div>
-                <span id="ledger-filtered-count" style="font-family:var(--font-mono); font-size:0.75rem; color:var(--ink-muted); margin-bottom:6px;">
-                  LOADING LEDGER…
-                </span>
               </div>
-            </div>
 
-            <!-- True Ruled Ledger Sheet Table -->
-            <div class="data-table-wrapper">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>INVOICE #</th>
-                    <th>VENDOR ENTITY</th>
-                    <th>BUYER / CUSTOMER</th>
-                    <th>DATE</th>
-                    <th class="th-amount amount-col-header">AMOUNT</th>
-                    <th style="text-align:center;">SETTLEMENT</th>
-                    <th style="text-align:right;">ACTION</th>
-                  </tr>
-                </thead>
-                <tbody id="ledger-table-body">
-                  <tr><td colspan="7" style="text-align:center; padding:3rem; color:var(--ink-muted);">Loading ledger records...</td></tr>
-                </tbody>
-              </table>
-            </div>
+              <div class="settings-section-block" style="margin-top:1.5rem;">
+                <h3 class="settings-section-heading" data-i18n="settings_datev_hdr">2. DATEV-Einstellungen (Steuerberater-Export)</h3>
+                <div class="field-grid" style="grid-template-columns: repeat(3, 1fr);">
+                  <div class="auth-form-group">
+                    <label for="setting-datev-chart">DATEV-Kontenrahmen</label>
+                    <select id="setting-datev-chart" class="auth-input" style="font-family:var(--font-mono); font-weight:700;">
+                      <option value="SKR03">SKR03 (Prozessgliederungsprinzip)</option>
+                      <option value="SKR04">SKR04 (Abschlussgliederungsprinzip)</option>
+                    </select>
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-datev-consultant">DATEV-Beraternummer</label>
+                    <input type="text" id="setting-datev-consultant" class="auth-input" value="12345" style="font-family:var(--font-mono);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-datev-client">DATEV-Mandantennummer</label>
+                    <input type="text" id="setting-datev-client" class="auth-input" value="40217" style="font-family:var(--font-mono);">
+                  </div>
+                </div>
+              </div>
 
+              <div class="settings-section-block" style="margin-top:1.5rem;">
+                <h3 class="settings-section-heading" data-i18n="settings_locale_hdr">3. Gebietsschema (Locale) &amp; Sprache</h3>
+                <div class="field-grid" style="grid-template-columns: repeat(4, 1fr);">
+                  <div class="auth-form-group">
+                    <label for="setting-currency">Währung</label>
+                    <input type="text" id="setting-currency" class="auth-input" value="EUR" readonly style="font-family:var(--font-mono); background:var(--paper);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-number-format">Zahlenformat (DE)</label>
+                    <input type="text" id="setting-number-format" class="auth-input" value="1.234,56" readonly style="font-family:var(--font-mono); background:var(--paper);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-date-format">Datumsformat (DE)</label>
+                    <input type="text" id="setting-date-format" class="auth-input" value="DD.MM.YYYY" readonly style="font-family:var(--font-mono); background:var(--paper);">
+                  </div>
+                  <div class="auth-form-group">
+                    <label for="setting-language">Oberflächensprache (DE / EN)</label>
+                    <select id="setting-language" class="auth-input" style="font-family:var(--font-mono); font-weight:700;">
+                      <option value="de">Deutsch (Standard)</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--hairline); display:flex; justify-content:flex-end; gap:0.75rem;">
+                <button type="submit" class="btn-primary" id="btn-save-settings" data-i18n="btn_save_settings">
+                  EINSTELLUNGEN SPEICHERN
+                </button>
+              </div>
+            </form>
           </div>
         </section>
 
@@ -673,144 +1135,132 @@
 
   </div>
 
-  <!-- ─────────────────────────────────────────────────────────────────── -->
-  <!-- Delete Confirmation Modal Dialog -->
-  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- =================================================================== -->
+  <!-- Delete Confirmation Modal Dialog                                    -->
+  <!-- =================================================================== -->
   <div class="modal-overlay" id="delete-modal-overlay">
     <div class="modal-box">
-      <h3>EXPUNGE RECORD FROM LEDGER</h3>
+      <h3>BELEG AUS DEM HAUPTBUCH LÖSCHEN</h3>
       <p style="font-family:var(--font-sans); font-size:0.88rem; color:var(--ink-muted); line-height:1.6; margin:0.75rem 0 1.25rem 0;">
-        Confirm deletion of invoice <strong id="delete-modal-inv-num" style="color:var(--ink); font-family:var(--font-mono);">record</strong> from your ledger. This action cannot be revoked.
+        Möchten Sie den Beleg <strong id="delete-modal-inv-num" style="color:var(--ink); font-family:var(--font-mono);">Beleg</strong> wirklich unwiderruflich aus der SQLite-Datenbank entfernen?
       </p>
       <div class="modal-actions">
-        <button class="btn-secondary" id="btn-modal-cancel">CANCEL</button>
+        <button class="btn-secondary" id="btn-modal-cancel">ABBRECHEN</button>
         <button class="btn-primary" id="btn-modal-confirm" style="background-color:var(--stamp-red); border-color:var(--stamp-red); color:#fff;">
-          EXPUNGE RECORD
+          ENDGÜLTIG LÖSCHEN
         </button>
       </div>
     </div>
   </div>
 
-  <!-- ─────────────────────────────────────────────────────────────────── -->
-  <!-- Tactile Paper Auth Overlay (Login / Signup / Verify OTP) -->
-  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- =================================================================== -->
+  <!-- Tactile Paper Auth Overlay (Login / Signup / Verify OTP)            -->
+  <!-- =================================================================== -->
   <div id="auth-overlay">
     <div class="auth-card">
-      <div class="auth-stamp-seal" id="auth-stamp-badge">OFFICIAL LEDGER</div>
+      <div class="auth-stamp-seal" id="auth-stamp-badge">PRÜFBUCHHALTUNG</div>
 
       <!-- VIEW A: LOGIN -->
       <div id="auth-screen-login" class="auth-screen">
         <div class="auth-header">
-          <div class="brand-tagline">FINANCIAL INTELLIGENCE FOLIO</div>
-          <h2>Auditor Log-In</h2>
-          <p>Access recorded vouchers, ledger metrics, and AI financial agents.</p>
+          <div class="brand-tagline">AUTOINVOICE DEUTSCHLAND &bull; DATEV &amp; XRECHNUNG</div>
+          <h2>Anmeldung Buchhaltung</h2>
+          <p>Zugriff auf Rechnungseingang, 9-Stufen-Prüfung, XRechnung und SEPA-Zahllauf.</p>
         </div>
 
         <div id="login-unverified-notice" class="auth-stamp-notice warning" style="display:none;">
-          <div class="stamp-tag">[UNVERIFIED LEDGER]</div>
-          <div class="stamp-desc">Your email address has not been verified yet. We have transmitted a 6-digit verification code to your inbox.</div>
+          <div class="stamp-tag">[E-MAIL NICHT VERIFIZIERT]</div>
+          <div class="stamp-desc">Bitte bestätigen Sie den 6-stelligen Verifizierungscode.</div>
           <button type="button" class="btn-text auth-link" id="btn-login-go-verify" style="margin-top:0.35rem; align-self:flex-start;">
-            Verify OTP Code Now &rarr;
+            Jetzt OTP-Code eingeben &rarr;
           </button>
         </div>
 
         <div id="login-error-notice" class="auth-stamp-notice error" style="display:none;">
-          <div class="stamp-tag">[ACCESS DENIED]</div>
-          <div class="stamp-desc" id="login-error-msg">Invalid email or password.</div>
+          <div class="stamp-tag">[ZUGRIFF VERWEIGERT]</div>
+          <div class="stamp-desc" id="login-error-msg">Ungültige E-Mail-Adresse oder Passwort.</div>
         </div>
 
         <form id="form-login" class="auth-form">
           <div class="auth-form-group">
-            <label for="login-email">Auditor Email Address</label>
-            <input type="email" id="login-email" class="auth-input" placeholder="auditor@firm.com" required autocomplete="email">
+            <label for="login-email">E-Mail-Adresse</label>
+            <input type="email" id="login-email" class="auth-input" placeholder="buchhaltung@rheinwerk.de" required autocomplete="email">
           </div>
           <div class="auth-form-group">
-            <label for="login-password">Ledger Passphrase</label>
+            <label for="login-password">Passwort</label>
             <div class="password-input-wrapper">
-              <input type="password" id="login-password" class="auth-input" placeholder="Enter your passphrase" required autocomplete="current-password">
-              <button type="button" class="password-toggle-btn" aria-label="Show passphrase" title="Show passphrase">
-                <svg class="eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                <svg class="eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
+              <input type="password" id="login-password" class="auth-input" placeholder="Passwort eingeben" required autocomplete="current-password">
+              <button type="button" class="password-toggle-btn" aria-label="Passwort anzeigen" title="Passwort anzeigen">
+                <svg class="eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                <svg class="eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
               </button>
             </div>
           </div>
           <button type="submit" class="btn-primary" id="btn-submit-login" style="margin-top:0.5rem; justify-content:center;">
-            ENTER FINANCIAL LEDGER
+            IM HAUPTBUCH ANMELDEN
           </button>
         </form>
 
         <div class="auth-footer-nav">
-          <span>Need an account? <button type="button" class="auth-link" id="btn-goto-signup">Register here</button></span>
-          <button type="button" class="auth-link" id="btn-goto-forgot">Forgot passphrase?</button>
+          <span>Noch kein Konto? <button type="button" class="auth-link" id="btn-goto-signup">Jetzt registrieren</button></span>
+          <button type="button" class="auth-link" id="btn-goto-forgot">Passwort vergessen?</button>
         </div>
       </div>
 
       <!-- VIEW B: SIGNUP -->
       <div id="auth-screen-signup" class="auth-screen" style="display:none;">
         <div class="auth-header">
-          <div class="brand-tagline">FOLIO ENROLLMENT</div>
-          <h2>Register Ledger Account</h2>
-          <p>Establish a verified financial record account with email authentication.</p>
+          <div class="brand-tagline">MANDANTEN-REGISTRIERUNG</div>
+          <h2>Neues Buchhaltungskonto</h2>
+          <p>Erstellen Sie ein verifiziertes Benutzerkonto für Ihr Unternehmen.</p>
         </div>
 
         <div id="signup-error-notice" class="auth-stamp-notice error" style="display:none;">
-          <div class="stamp-tag">[REGISTRATION ALERT]</div>
+          <div class="stamp-tag">[REGISTRIERUNGSHINWEIS]</div>
           <div class="stamp-desc" id="signup-error-msg"></div>
         </div>
 
         <form id="form-signup" class="auth-form">
           <div class="auth-form-group">
-            <label for="signup-email">Official Email Address</label>
-            <input type="email" id="signup-email" class="auth-input" placeholder="auditor@firm.com" required autocomplete="email">
+            <label for="signup-email">Dienstliche E-Mail-Adresse</label>
+            <input type="email" id="signup-email" class="auth-input" placeholder="buchhaltung@rheinwerk.de" required autocomplete="email">
           </div>
           <div class="auth-form-group">
-            <label for="signup-password">Create Passphrase (Min. 8 Characters)</label>
+            <label for="signup-password">Passwort (mind. 8 Zeichen)</label>
             <div class="password-input-wrapper">
-              <input type="password" id="signup-password" class="auth-input" placeholder="Enter your passphrase" minlength="8" required autocomplete="new-password">
-              <button type="button" class="password-toggle-btn" aria-label="Show passphrase" title="Show passphrase">
-                <svg class="eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                <svg class="eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
+              <input type="password" id="signup-password" class="auth-input" placeholder="Passwort wählen" minlength="8" required autocomplete="new-password">
+              <button type="button" class="password-toggle-btn" aria-label="Passwort anzeigen" title="Passwort anzeigen">
+                <svg class="eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                <svg class="eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><line x1="1" y1="1" x2="23" y2="23"></line></svg>
               </button>
             </div>
           </div>
           <button type="submit" class="btn-primary" id="btn-submit-signup" style="margin-top:0.5rem; justify-content:center;">
-            REGISTER &amp; SEND VERIFICATION CODE
+            REGISTRIEREN &amp; CODE ANFORDERN
           </button>
         </form>
 
         <div class="auth-footer-nav">
-          <span>Already registered? <button type="button" class="auth-link" id="btn-goto-login">Return to Log-In</button></span>
+          <span>Bereits registriert? <button type="button" class="auth-link" id="btn-goto-login">Zurück zur Anmeldung</button></span>
         </div>
       </div>
 
       <!-- VIEW C: VERIFY OTP -->
       <div id="auth-screen-verify" class="auth-screen" style="display:none;">
         <div class="auth-header">
-          <div class="brand-tagline">TWO-FACTOR DISPATCH VERIFICATION</div>
-          <h2>Verify Authorization Code</h2>
-          <p>Enter the 6-digit code transmitted to <strong id="verify-email-display" style="font-family:var(--font-mono); color:var(--ink);">auditor@firm.com</strong></p>
+          <div class="brand-tagline">ZWEI-FAKTOR-FREIGABE</div>
+          <h2>Sicherheitscode bestätigen</h2>
+          <p>6-stelliger Code für <strong id="verify-email-display" style="font-family:var(--font-mono); color:var(--ink);">buchhaltung@rheinwerk.de</strong></p>
         </div>
 
         <div id="verify-error-stamp" class="auth-stamp-notice error" style="display:none;">
-          <div class="stamp-tag">[AUDIT REJECTED / INVALID CODE]</div>
-          <div class="stamp-desc" id="verify-error-msg">The authorization code entered is invalid or has expired.</div>
+          <div class="stamp-tag">[UNGÜLTIGER CODE]</div>
+          <div class="stamp-desc" id="verify-error-msg">Der eingegebene Code ist ungültig oder abgelaufen.</div>
         </div>
 
         <div id="verify-success-stamp" class="auth-stamp-notice success" style="display:none;">
-          <div class="stamp-tag">[DISPATCH TRANSMITTED]</div>
-          <div class="stamp-desc">A fresh verification code has been dispatched to your email.</div>
+          <div class="stamp-tag">[CODE GESENDET]</div>
+          <div class="stamp-desc">Ein neuer Sicherheitscode wurde gesendet.</div>
         </div>
 
         <form id="form-verify-otp" class="auth-form">
@@ -824,166 +1274,138 @@
           </div>
 
           <div class="otp-meta">
-            <span>EXPIRY: 10 MINUTES</span>
+            <span>GÜLTIGKEIT: 10 MINUTEN</span>
             <div id="resend-container">
-              <span>RESEND IN <strong id="resend-timer-seconds">60</strong>S</span>
+              <span>ERNEUT SENDEN IN <strong id="resend-timer-seconds">60</strong>S</span>
             </div>
             <button type="button" id="btn-trigger-resend" class="auth-link" style="display:none;">
-              Resend verification code
+              Code erneut anfordern
             </button>
           </div>
 
           <button type="submit" class="btn-primary" id="btn-submit-verify" style="justify-content:center;">
-            CONFIRM AUTHORIZATION &amp; ENTER
+            CODE BESTÄTIGEN &amp; ÖFFNEN
           </button>
         </form>
 
         <div class="auth-footer-nav">
-          <button type="button" class="auth-link" id="btn-verify-back-login">&larr; Return to Log-In</button>
+          <button type="button" class="auth-link" id="btn-verify-back-login">&larr; Zurück zur Anmeldung</button>
         </div>
       </div>
 
       <!-- VIEW D: FORGOT PASSWORD -->
       <div id="auth-screen-forgot" class="auth-screen" style="display:none;">
         <div class="auth-header">
-          <div class="brand-tagline">PASSPHRASE RECOVERY</div>
-          <h2>Reset Ledger Passphrase</h2>
-          <p>Submit your email to receive a secure password reset code.</p>
+          <div class="brand-tagline">PASSWORT-WIEDERHERSTELLUNG</div>
+          <h2>Passwort zurücksetzen</h2>
+          <p>Geben Sie Ihre E-Mail-Adresse ein, um einen Wiederherstellungscode zu erhalten.</p>
         </div>
-
         <div id="forgot-notice" class="auth-stamp-notice success" style="display:none;">
-          <div class="stamp-tag">[RECOVERY TRANSMITTED]</div>
-          <div class="stamp-desc">If the account exists, a reset code was transmitted.</div>
+          <div class="stamp-tag">[CODE ÜBERMITTELT]</div>
+          <div class="stamp-desc">Sofern das Konto existiert, wurde ein Code gesendet.</div>
         </div>
-
         <form id="form-forgot" class="auth-form">
           <div class="auth-form-group">
-            <label for="forgot-email">Auditor Email Address</label>
-            <input type="email" id="forgot-email" class="auth-input" placeholder="auditor@firm.com" required autocomplete="email">
+            <label for="forgot-email">E-Mail-Adresse</label>
+            <input type="email" id="forgot-email" class="auth-input" placeholder="buchhaltung@rheinwerk.de" required autocomplete="email">
           </div>
           <button type="submit" class="btn-primary" id="btn-submit-forgot" style="margin-top:0.5rem; justify-content:center;">
-            TRANSMIT RECOVERY CODE
+            WIEDERHERSTELLUNGSCODE ANFORDERN
           </button>
         </form>
-
         <div class="auth-footer-nav">
-          <button type="button" class="auth-link" id="btn-forgot-back-login">&larr; Return to Log-In</button>
+          <button type="button" class="auth-link" id="btn-forgot-back-login">&larr; Zurück zur Anmeldung</button>
         </div>
       </div>
 
       <!-- VIEW E: RESET PASSWORD -->
       <div id="auth-screen-reset" class="auth-screen" style="display:none;">
         <div class="auth-header">
-          <div class="brand-tagline">PASSPHRASE RENEWAL</div>
-          <h2>Set New Passphrase</h2>
-          <p>Enter the 6-digit recovery code and specify your new passphrase.</p>
+          <div class="brand-tagline">PASSWORT ERNEUERN</div>
+          <h2>Neues Passwort festlegen</h2>
+          <p>Geben Sie den 6-stelligen Code und Ihr neues Passwort ein.</p>
         </div>
-
         <div id="reset-error-stamp" class="auth-stamp-notice error" style="display:none;">
-          <div class="stamp-tag">[RENEWAL REJECTED]</div>
-          <div class="stamp-desc" id="reset-error-msg">Invalid recovery code or input.</div>
+          <div class="stamp-tag">[FEHLER]</div>
+          <div class="stamp-desc" id="reset-error-msg">Ungültiger Code oder Eingabe.</div>
         </div>
-
         <form id="form-reset" class="auth-form">
           <div class="auth-form-group">
-            <label for="reset-code">6-Digit Recovery Code</label>
+            <label for="reset-code">6-stelliger Code</label>
             <input type="text" id="reset-code" class="auth-input" placeholder="123456" maxlength="6" required style="font-family:var(--font-mono); letter-spacing:3px;">
           </div>
           <div class="auth-form-group">
-            <label for="reset-new-password">New Passphrase (Min. 8 Characters)</label>
+            <label for="reset-new-password">Neues Passwort (mind. 8 Zeichen)</label>
             <div class="password-input-wrapper">
-              <input type="password" id="reset-new-password" class="auth-input" placeholder="Enter your passphrase" minlength="8" required>
-              <button type="button" class="password-toggle-btn" aria-label="Show passphrase" title="Show passphrase">
-                <svg class="eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                <svg class="eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              </button>
+              <input type="password" id="reset-new-password" class="auth-input" placeholder="Neues Passwort" minlength="8" required>
             </div>
           </div>
           <button type="submit" class="btn-primary" id="btn-submit-reset" style="margin-top:0.5rem; justify-content:center;">
-            UPDATE PASSPHRASE &amp; LOG IN
+            PASSWORT SPEICHERN
           </button>
         </form>
-
         <div class="auth-footer-nav">
-          <button type="button" class="auth-link" id="btn-reset-back-login">&larr; Return to Log-In</button>
+          <button type="button" class="auth-link" id="btn-reset-back-login">&larr; Zurück zur Anmeldung</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ─────────────────────────────────────────────────────────────────── -->
-  <!-- Modal: Custom Chart Builder & Pin Folio -->
-  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- =================================================================== -->
+  <!-- Modal: Custom Chart Builder & Pin Folio                             -->
+  <!-- =================================================================== -->
   <div id="modal-custom-chart" class="modal-backdrop" style="display:none;">
     <div class="modal-dialog paper-modal" style="max-width: 600px; width: 92%;">
       <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--hairline); padding-bottom:0.75rem;">
         <div>
-          <span style="font-family:var(--font-mono); font-size:0.7rem; color:var(--ink-muted); letter-spacing:0.06em;">CUSTOM ANALYTICS BUILDER</span>
-          <h2 style="font-family:var(--font-serif); font-size:1.25rem; margin:0.2rem 0 0 0; color:var(--ink);">Pin Custom Graph to Ledger</h2>
+          <span style="font-family:var(--font-mono); font-size:0.7rem; color:var(--ink-muted);">DIAGRAMM-ASSISTENT</span>
+          <h2 style="font-family:var(--font-serif); font-size:1.25rem; margin:0.2rem 0 0 0; color:var(--ink);">Diagramm an Übersicht anheften</h2>
         </div>
-        <button type="button" id="btn-close-chart-modal" style="background:none; border:none; font-size:1.25rem; cursor:pointer; color:var(--ink-muted); padding:0.2rem 0.5rem; line-height:1;">✕</button>
+        <button type="button" id="btn-close-chart-modal" style="background:none; border:none; font-size:1.25rem; cursor:pointer; color:var(--ink-muted);">✕</button>
       </div>
 
       <div class="modal-body" style="padding:1rem 0;">
-        <p style="font-size:0.8rem; color:var(--ink-muted); margin-bottom:0.75rem; line-height:1.4;">
-          Specify any financial analysis or visualization prompt below. The AI engine will generate the chart and pin it permanently to your ledger dashboard.
-        </p>
-
-        <!-- Prompt input -->
         <div style="margin-bottom:0.85rem;">
           <label for="input-custom-chart-prompt" style="display:block; font-family:var(--font-mono); font-size:0.72rem; color:var(--ink); margin-bottom:0.35rem; font-weight:600;">
-            ANALYTICAL INQUIRY / PROMPT
+            ANALYSE-ANFRAGE
           </label>
-          <textarea id="input-custom-chart-prompt" rows="3" placeholder="e.g. Plot top 5 vendors by spend, monthly cashflow trend, or payment status breakdown..." style="width:100%; box-sizing:border-box; font-family:var(--font-sans); font-size:0.82rem; padding:0.6rem; border:1px solid var(--hairline); background:var(--paper-card); color:var(--ink); border-radius:2px; resize:vertical;"></textarea>
+          <textarea id="input-custom-chart-prompt" rows="3" placeholder="z.B. Umsatz nach Lieferant, Top-Positionen oder Zahlungsstatus..." style="width:100%; box-sizing:border-box; font-family:var(--font-sans); font-size:0.82rem; padding:0.6rem; border:1px solid var(--hairline); background:var(--paper-card); color:var(--ink);"></textarea>
         </div>
 
-        <!-- Suggestion chips -->
         <div style="margin-bottom:0.95rem;">
-          <span style="font-family:var(--font-mono); font-size:0.68rem; color:var(--ink-muted); display:block; margin-bottom:0.4rem;">QUICK TEMPLATES:</span>
+          <span style="font-family:var(--font-mono); font-size:0.68rem; color:var(--ink-muted); display:block; margin-bottom:0.4rem;">VORLAGEN:</span>
           <div style="display:flex; flex-wrap:wrap; gap:0.4rem;" id="chart-suggestion-chips">
-            <button type="button" class="chart-template-chip" data-prompt="Plot the top 5 vendors by spend">Top 5 Vendors</button>
-            <button type="button" class="chart-template-chip" data-prompt="Pie chart of paid vs unpaid vs overdue invoices">Payment Status</button>
-            <button type="button" class="chart-template-chip" data-prompt="Line graph of invoice amounts over time by date">Spend Timeline</button>
-            <button type="button" class="chart-template-chip" data-prompt="Generate a graph of top five items on which we spend">Top 5 Line Items</button>
-            <button type="button" class="chart-template-chip" data-prompt="Vendor market share donut chart">Vendor Market Share</button>
-            <button type="button" class="chart-template-chip" data-prompt="Histogram of invoice total amounts distribution">Spend Distribution</button>
+            <button type="button" class="chart-template-chip" data-prompt="Top Lieferanten nach Umsatz">Top Lieferanten</button>
+            <button type="button" class="chart-template-chip" data-prompt="Zahlungsstatus bezahlt vs offen">Zahlungsstatus</button>
+            <button type="button" class="chart-template-chip" data-prompt="Rechnungsbeträge im Zeitverlauf nach Datum">Zeitverlauf</button>
+            <button type="button" class="chart-template-chip" data-prompt="Top Positionen und Artikel nach Netto-Volumen">Top Artikel</button>
           </div>
         </div>
 
-        <!-- Optional custom title -->
         <div style="margin-bottom:0.75rem;">
           <label for="input-custom-chart-title" style="display:block; font-family:var(--font-mono); font-size:0.72rem; color:var(--ink); margin-bottom:0.35rem; font-weight:600;">
-            CARD TITLE (OPTIONAL)
+            TITEL (OPTIONAL)
           </label>
-          <input type="text" id="input-custom-chart-title" placeholder="e.g. Major Supplier Allocation Breakdown" style="width:100%; box-sizing:border-box; font-family:var(--font-sans); font-size:0.82rem; padding:0.5rem 0.6rem; border:1px solid var(--hairline); background:var(--paper-card); color:var(--ink); border-radius:2px;">
+          <input type="text" id="input-custom-chart-title" placeholder="z.B. Lieferanten-Umsatzverteilung" style="width:100%; box-sizing:border-box; font-family:var(--font-sans); font-size:0.82rem; padding:0.5rem 0.6rem; border:1px solid var(--hairline); background:var(--paper-card); color:var(--ink);">
         </div>
 
-        <!-- Generation Progress / Error Notice -->
         <div id="custom-chart-status-notice" style="display:none; padding:0.6rem 0.75rem; margin-top:0.6rem; font-family:var(--font-mono); font-size:0.74rem; border:1px dashed var(--hairline);"></div>
       </div>
 
       <div class="modal-footer" style="display:flex; justify-content:flex-end; gap:0.6rem; border-top:1px solid var(--hairline); padding-top:0.75rem;">
-        <button type="button" class="btn-secondary" id="btn-cancel-custom-chart" style="padding:0.4rem 0.85rem; font-size:0.75rem;">CANCEL</button>
-        <button type="button" class="btn-primary" id="btn-submit-custom-chart" style="padding:0.4rem 1rem; font-size:0.75rem; display:flex; align-items:center; gap:0.4rem;">
+        <button type="button" class="btn-secondary" id="btn-cancel-custom-chart">ABBRECHEN</button>
+        <button type="button" class="btn-primary" id="btn-submit-custom-chart">
           <span id="btn-submit-chart-spinner" style="display:none;">⏳</span>
-          GENERATE &amp; PIN TO DASHBOARD
+          ERSTELLEN &amp; ANHEFTEN
         </button>
       </div>
     </div>
   </div>
 
-  <!-- ─────────────────────────────────────────────────────────────────── -->
-  <!-- Tactile Paper Toast Container -->
-  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- Toast Container -->
   <div id="toast-container"></div>
 
   <!-- Application Script Module -->
-  <script type="module" src="/static/js/app.js?v=2.3"></script>
+  <script type="module" src="/static/js/app.js?v=3.0"></script>
 </body>
 </html>

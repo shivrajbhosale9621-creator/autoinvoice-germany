@@ -3,12 +3,15 @@ import secrets
 import hashlib
 import hmac
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
-from sqlalchemy import select, update, desc
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.database import AsyncSession
 from app.models.otp import OtpCode, OtpPurpose
+
+try:
+    from sqlalchemy import select, update, desc
+except ImportError:
+    from app.core.database import select, update, desc
 
 OTP_EXPIRY_MINUTES = 10
 MAX_ATTEMPTS = 5
@@ -28,7 +31,7 @@ class OtpInvalidError(Exception):
 
 
 def generate_otp() -> str:
-    """Generate a 6-digit cryptographic OTP string from secrets module (never pseudo-random)."""
+    """Generate a 6-digit cryptographic OTP string from secrets module."""
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
@@ -77,17 +80,12 @@ async def create_and_store_otp(
 ) -> str:
     """
     Generate, hash, and store a new 6-digit OTP code for a user and purpose.
-    - Optionally enforces 60-second cooldown (for resend requests).
-    - Invalidates all existing unconsumed codes for this user and purpose.
-    - Sets 10-minute expiry and attempts=0.
-    - Returns the plaintext code to be delivered via email (never logged or stored).
     """
     now = datetime.now(timezone.utc)
 
     if enforce_cooldown:
         await check_cooldown(db, user_id, purpose)
 
-    # Invalidate older unconsumed codes for this user and purpose
     invalidate_stmt = (
         update(OtpCode)
         .where(
@@ -99,7 +97,6 @@ async def create_and_store_otp(
     )
     await db.execute(invalidate_stmt)
 
-    # Generate 6-digit code
     raw_code = generate_otp()
     code_digest = hash_otp_code(raw_code)
     expires_at = now + timedelta(minutes=OTP_EXPIRY_MINUTES)
@@ -127,10 +124,6 @@ async def verify_and_consume_otp(
 ) -> bool:
     """
     Verify candidate code against active unconsumed OTP for user and purpose.
-    - Increments attempts counter on failure.
-    - If attempts >= 5, marks consumed/dead.
-    - On success, marks consumed=True and returns True.
-    - Returns False on any verification failure.
     """
     now = datetime.now(timezone.utc)
 
