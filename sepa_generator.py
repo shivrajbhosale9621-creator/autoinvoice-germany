@@ -3,7 +3,8 @@ sepa_generator.py - SEPA Credit Transfer pain.001.001.03 Generator & IBAN Valida
 
 Implements:
 - ISO 13616 Mod-97 IBAN checksum validation in Python.
-- One bad IBAN blocks only that payment, never the whole run, and is reported to the user.
+- Enforces valid Debtor IBAN from Settings before generating any SEPA file.
+- One bad creditor IBAN blocks only that payment, never the whole run, and is reported to the user.
 - Generates German DK standard pain.001.001.03 XML file with Group Header (MsgId, CreDtTm,
   NbOfTxs, CtrlSum), Debtor block from Settings, and one CdtTrfTxInf per vendor payment.
 - Records audit trail in SQLite `payment_runs` and marks paid invoices as 'Paid'.
@@ -34,11 +35,6 @@ IBAN_COUNTRY_LENGTHS = {
     "PL": 28,
 }
 
-# Known synthetic demo IBAN printed on Kessler Industrietechnik GmbH test PDFs (INV-01 to INV-06)
-_DEMO_FIXTURE_IBANS = {
-    "DE89612901200457331008",
-}
-
 
 def validate_iban_checksum(iban: str) -> Tuple[bool, str, str]:
     """
@@ -50,7 +46,7 @@ def validate_iban_checksum(iban: str) -> Tuple[bool, str, str]:
         return False, "", "IBAN fehlt (leer)."
 
     if not re.match(r"^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$", clean):
-        return False, clean, f"IBAN '{iban}' hat ein ungültiges Grundformat."
+        return False, clean, f"IBAN '{iban}' hat ein ungueltiges Grundformat."
 
     cc = clean[:2]
     expected_len = IBAN_COUNTRY_LENGTHS.get(cc)
@@ -58,7 +54,7 @@ def validate_iban_checksum(iban: str) -> Tuple[bool, str, str]:
         return (
             False,
             clean,
-            f"IBAN '{clean}' hat Länge {len(clean)} (für {cc} sind {expected_len} Zeichen vorgeschrieben).",
+            f"IBAN '{clean}' hat Laenge {len(clean)} (fuer {cc} sind {expected_len} Zeichen vorgeschrieben).",
         )
 
     # Move first 4 chars to the end and convert A-Z -> 10-35
@@ -71,10 +67,10 @@ def validate_iban_checksum(iban: str) -> Tuple[bool, str, str]:
             numeric_chars.append(str(ord(ch) - ord("A") + 10))
     numeric_int = int("".join(numeric_chars))
 
-    if numeric_int % 97 != 1 and clean not in _DEMO_FIXTURE_IBANS:
-        return False, clean, f"IBAN-Prüfziffer (Modulo 97) für '{clean}' ist ungültig."
+    if numeric_int % 97 != 1:
+        return False, clean, f"IBAN-Pruefziffer (Modulo 97) fuer '{clean}' ist ungueltig."
 
-    return True, clean, "IBAN gültig (Mod-97 OK)."
+    return True, clean, "IBAN gueltig (Mod-97 OK)."
 
 
 def preview_payment_run(
@@ -85,11 +81,13 @@ def preview_payment_run(
 ) -> Dict[str, Any]:
     """
     Preview a SEPA payment run before human confirmation.
-    Validates every invoice's IBAN and computes exact EUR amounts.
+    Validates the debtor IBAN from Settings and every invoice's creditor IBAN,
+    and computes exact EUR amounts.
     """
     init_db(db_path)
     settings_data = get_user_settings(user_id, db_path)
-    debtor_iban_ok, debtor_iban_clean, debtor_iban_msg = validate_iban_checksum(settings_data.get("iban") or "")
+    raw_debtor_iban = str(settings_data.get("iban") or "").strip()
+    debtor_iban_ok, debtor_iban_clean, debtor_iban_msg = validate_iban_checksum(raw_debtor_iban)
 
     valid_payments = []
     blocked_payments = []
@@ -121,7 +119,7 @@ def preview_payment_run(
                 "vendor_name": vendor_name,
                 "iban": raw_iban,
                 "amount": gross,
-                "reason": "Gutschrift oder Betrag <= 0,00 € (keine Überweisung).",
+                "reason": "Gutschrift oder Betrag <= 0,00 EUR (keine Ueberweisung).",
             })
             continue
 
@@ -158,7 +156,7 @@ def preview_payment_run(
     return {
         "debtor": {
             "name": settings_data.get("company_name") or "Rheinwerk Anlagenbau AG",
-            "iban": debtor_iban_clean or re.sub(r"\s+", "", settings_data.get("iban") or ""),
+            "iban": debtor_iban_clean or re.sub(r"\s+", "", raw_debtor_iban),
             "iban_valid": debtor_iban_ok,
             "iban_message": debtor_iban_msg,
             "bic": settings_data.get("bic") or "COBADEFFXXX",
@@ -182,6 +180,7 @@ def execute_approved_payment_run(
     """
     Generate the SEPA pain.001.001.03 XML file after explicit human approval,
     persist the audit record in `payment_runs`, and mark paid invoices as 'Paid'.
+    Refuses generation if the debtor IBAN in Settings fails Mod-97 validation.
     """
     preview = preview_payment_run(
         invoice_identifiers=invoice_identifiers,
@@ -193,9 +192,15 @@ def execute_approved_payment_run(
     blocked_txs = preview["blocked_payments"]
     debtor = preview["debtor"]
 
+    if not debtor.get("iban_valid"):
+        bad_debtor_iban = debtor.get("iban") or "(leer)"
+        raise ValueError(
+            f"SEPA-Zahllauf abgelehnt: Ungueltige Debitor-IBAN '{bad_debtor_iban}' in den Einstellungen ({debtor.get('iban_message')})."
+        )
+
     if not valid_txs:
         raise ValueError(
-            "Keine gültigen Zahlungen im Zahllauf (alle ausgewählten Belege wurden wegen ungültiger IBAN oder Betrag <= 0 blockiert)."
+            "Keine gueltigen Zahlungen im Zahllauf (alle ausgewaehlten Belege wurden wegen ungueltiger IBAN oder Betrag <= 0 blockiert)."
         )
 
     now_utc = datetime.now(timezone.utc)

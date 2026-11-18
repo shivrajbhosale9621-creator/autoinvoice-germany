@@ -24,14 +24,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code (.dockerignore excludes chroma_db, invoices.db, venvs, tests, etc.)
+# Copy application code (.dockerignore excludes local databases, venvs, tests, etc.)
 COPY . .
 
 # Ensure runtime directories exist
-RUN mkdir -p inboxes reports chroma_db
+RUN mkdir -p inboxes reports
 
-# Pre-download and bake ML models into image layers (RapidOCR ONNX & ChromaDB DefaultEmbeddingFunction)
-RUN python -c "from ocr_engine import get_ocr_model_paths; get_ocr_model_paths(); from chromadb.utils import embedding_functions; embedding_functions.DefaultEmbeddingFunction()(['warmup'])"
+# Pre-download and bake RapidOCR ONNX models into image layers
+RUN python -c "from ocr_engine import get_ocr_model_paths; get_ocr_model_paths()"
 
 # Expose default application port
 EXPOSE 5000

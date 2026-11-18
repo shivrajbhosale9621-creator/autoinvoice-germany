@@ -6,8 +6,67 @@ let trendChartInstance = null;
 let donutChartInstance = null;
 let vendorChartInstance = null;
 
+/**
+ * Parse a German or standard decimal string strictly without silently falling back to 0.
+ * Examples:
+ *   "1.234,56" -> 1234.56
+ *   "1.500"    -> 1500
+ *   "225,80-"  -> -225.8
+ *   "48.02"    -> 48.02
+ *   "abc"      -> null (unparseable)
+ *   ""         -> null (empty)
+ */
+export function parseGermanDecimal(rawVal) {
+  if (rawVal === null || rawVal === undefined || typeof rawVal === "boolean") {
+    return null;
+  }
+  if (typeof rawVal === "number") {
+    return Number.isFinite(rawVal) ? rawVal : null;
+  }
+  let s = String(rawVal).trim();
+  if (!s) return null;
+
+  // Strip optional currency/unit tokens
+  s = s.replace(/(?:EUR|USD|GBP|CHF|€|\$|£|%)/gi, "").trim();
+  if (!s) return null;
+
+  let negative = false;
+  if (s.endsWith("-")) {
+    negative = true;
+    s = s.slice(0, -1).trim();
+  } else if (s.startsWith("-")) {
+    negative = true;
+    s = s.slice(1).trim();
+  } else if (s.startsWith("+")) {
+    s = s.slice(1).trim();
+  }
+  if (!s) return null;
+
+  let normalized = "";
+  if (/^(?:\d{1,3}(?:\.\d{3})+|\d+),\d+$/.test(s)) {
+    // German decimal with comma (e.g. "1.234,56" or "48,02")
+    normalized = s.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(s)) {
+    // German thousands grouping integer (e.g. "1.500" -> 1500)
+    normalized = s.replace(/\./g, "");
+  } else if (/^\d{1,3}(?:,\d{3})+\.\d+$/.test(s)) {
+    // English thousands grouping with dot decimal (e.g. "1,234.56")
+    normalized = s.replace(/,/g, "");
+  } else if (/^\d+(?:\.\d+)?$/.test(s)) {
+    // Standard integer or dot decimal (e.g. "1234.56", "26", "0")
+    normalized = s;
+  } else {
+    return null;
+  }
+
+  const num = Number(normalized);
+  if (!Number.isFinite(num)) return null;
+  return negative ? -num : num;
+}
+
 export function formatNumberDE(amount, decimals = 2) {
-  const num = parseFloat(amount) || 0;
+  const parsed = parseGermanDecimal(amount);
+  const num = parsed !== null ? parsed : 0;
   return num.toLocaleString("de-DE", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

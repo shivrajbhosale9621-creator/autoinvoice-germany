@@ -81,6 +81,54 @@ GERMAN_MONTHS = {
 }
 
 
+
+def parse_german_decimal_strict(val: Any, field_name: str = "amount") -> float:
+    """
+    Strictly parse a German or standard decimal value (e.g. "1.234,56" -> 1234.56,
+    "1.500" -> 1500.0, "225,80-" -> -225.80). Raises ValueError naming `field_name`
+    if `val` is empty or unparseable (e.g. "abc"), never silently falling back to 0.
+    """
+    if val is None or isinstance(val, bool):
+        raise ValueError(f"Ungueltiger Zahlenwert im Feld '{field_name}': Wert fehlt.")
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s:
+        raise ValueError(f"Ungueltiger Zahlenwert im Feld '{field_name}': Leerer Wert.")
+    s = re.sub(r"(?:EUR|USD|INR|GBP|CHF|€|\$|₹|£|%)", "", s, flags=re.IGNORECASE).strip()
+    if not s:
+        raise ValueError(f"Ungueltiger Zahlenwert im Feld '{field_name}': '{val}'.")
+
+    negative = False
+    if s.endswith("-"):
+        negative = True
+        s = s[:-1].strip()
+    elif s.startswith("-"):
+        negative = True
+        s = s[1:].strip()
+    elif s.startswith("+"):
+        s = s[1:].strip()
+
+    if not s:
+        raise ValueError(f"Ungueltiger Zahlenwert im Feld '{field_name}': '{val}'.")
+
+    if re.match(r"^(?:\d{1,3}(?:\.\d{3})+|\d+),\d+$", s):
+        norm_s = s.replace(".", "").replace(",", ".")
+    elif re.match(r"^\d{1,3}(?:\.\d{3})+$", s):
+        norm_s = s.replace(".", "")
+    elif re.match(r"^\d{1,3}(?:,\d{3})+\.\d+$", s):
+        norm_s = s.replace(",", "")
+    elif re.match(r"^\d+(?:\.\d+)?$", s):
+        norm_s = s
+    else:
+        raise ValueError(
+            f"Ungueltiger Zahlenwert im Feld '{field_name}': '{val}' kann nicht als Dezimalzahl gelesen werden."
+        )
+
+    res = float(norm_s)
+    return -res if negative else res
+
+
 def parse_numeric(val: Any, default: float = 0.0) -> float:
     """
     Parse numeric currency or float values, supporting both German format
@@ -1097,8 +1145,36 @@ def update_invoice_record(
     if not existing:
         return None
 
+    # Strictly validate any edited numeric fields so unparseable strings never become 0
+    top_numeric_fields = ("subtotal", "tax_amount", "tax", "total_amount", "discount", "skonto_percent", "skonto_amount")
+    clean_updates = dict(updates)
+    for nf in top_numeric_fields:
+        if nf in clean_updates and clean_updates[nf] is not None:
+            clean_updates[nf] = parse_german_decimal_strict(clean_updates[nf], nf)
+
+    for items_key in ("line_items", "items"):
+        if items_key in clean_updates and isinstance(clean_updates[items_key], list):
+            validated_items = []
+            for idx, item in enumerate(clean_updates[items_key], start=1):
+                item_copy = dict(item)
+                for lnf in ("quantity", "qty", "price_unit", "unit_price", "rate", "discount_percent", "discount", "line_total", "total", "vat_rate"):
+                    if lnf in item_copy and item_copy[lnf] is not None:
+                        item_copy[lnf] = parse_german_decimal_strict(item_copy[lnf], f"line_items[{idx}].{lnf}")
+                validated_items.append(item_copy)
+            clean_updates[items_key] = validated_items
+
+    if "vat_breakdown" in clean_updates and isinstance(clean_updates["vat_breakdown"], list):
+        validated_vb = []
+        for idx, vb in enumerate(clean_updates["vat_breakdown"], start=1):
+            vb_copy = dict(vb)
+            for vnf in ("rate", "net", "vat"):
+                if vnf in vb_copy and vb_copy[vnf] is not None:
+                    vb_copy[vnf] = parse_german_decimal_strict(vb_copy[vnf], f"vat_breakdown[{idx}].{vnf}")
+            validated_vb.append(vb_copy)
+        clean_updates["vat_breakdown"] = validated_vb
+
     merged = {**existing}
-    for k, v in updates.items():
+    for k, v in clean_updates.items():
         if v is not None:
             merged[k] = v
 

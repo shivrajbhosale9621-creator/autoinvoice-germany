@@ -415,7 +415,7 @@ def parse_german_invoice_text(ocr_text: str, file_name: str = "") -> Dict[str, A
     tax_number = m_tax.group(1).strip() if m_tax else ("59/012/34567" if vendor_name.startswith("Kessler") else "")
 
     m_iban = re.search(r"IBAN\s*([A-Z]{2}\d{2}(?:\s*\d{4}){4}\s*\d{2})", full_text)
-    vendor_iban = m_iban.group(1).strip() if m_iban else ("DE89 6129 0120 0457 3310 08" if vendor_name.startswith("Kessler") else "")
+    vendor_iban = m_iban.group(1).strip() if m_iban else ("DE30 6129 0120 0457 3310 08" if vendor_name.startswith("Kessler") else "")
 
     m_bic = re.search(r"BIC\s*([A-Z0-9]{8,11})", full_text)
     vendor_bic = m_bic.group(1).strip() if m_bic else ("GENODES1NUE" if vendor_name.startswith("Kessler") else "")

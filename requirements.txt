@@ -14,11 +14,15 @@ pytesseract>=0.3.10
 rapidocr-onnxruntime>=1.3.0
 opencv-python-headless>=4.8.0
 
-# LLM (Groq API for optional structuring & phrasing)
+# LLM (Groq API & LangChain wrappers for optional structuring & phrasing)
 groq>=0.11.0
+langchain-core>=0.2.0
+langchain-groq>=0.1.0
 
 # Utilities
 python-dotenv>=1.0.0
+requests>=2.31.0
+pydantic-settings>=2.2.0
 
 # FastAPI & Server
 fastapi>=0.110.0

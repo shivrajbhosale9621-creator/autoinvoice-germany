@@ -599,12 +599,15 @@ async def update_single_invoice(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    updated = await asyncio.to_thread(
-        update_invoice_record,
-        doc_id,
-        updates,
-        user_id=user_id,
-    )
+    try:
+        updated = await asyncio.to_thread(
+            update_invoice_record,
+            doc_id,
+            updates,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Beleg wurde nicht gefunden.")
 
@@ -655,25 +658,23 @@ async def download_xrechnung_xml(
     if not inv:
         raise HTTPException(status_code=404, detail="Beleg wurde nicht gefunden.")
 
-    effective_leitweg = str(leitweg_id or inv.get("leitweg_id") or "").strip()
-    if not effective_leitweg and use_settings_leitweg:
+    raw_lw = str(leitweg_id if leitweg_id is not None else (inv.get("leitweg_id") or "")).strip()
+    if raw_lw.lower() in ("", "n/a", "na", "none", "null", "-", "unknown", "unbekannt") and use_settings_leitweg:
         user_cfg = get_user_settings(user_id, CHAT_DB_PATH)
-        effective_leitweg = str(user_cfg.get("leitweg_id") or "").strip()
+        raw_lw = str(user_cfg.get("leitweg_id") or "").strip()
+    effective_leitweg = "" if raw_lw.lower() in ("", "n/a", "na", "none", "null", "-", "unknown", "unbekannt") else raw_lw
 
-    if not effective_leitweg:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "V9 fehlgeschlagen: Leitweg-ID (BT-10) fehlt. "
-                "Die Leitweg-ID ist für XRechnung verpflichtend. Bitte tragen Sie auf der "
-                "Belegdetailseite eine Leitweg-ID ein und speichern Sie den Beleg."
-            ),
-        )
-
+    val_check = validate_invoice({**inv, "leitweg_id": effective_leitweg})
     try:
         xml_content = generate_xrechnung_xml(inv, default_leitweg_id=effective_leitweg)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    if not val_check.get("xrechnung_ready", False):
+        raise HTTPException(
+            status_code=422,
+            detail="XRechnung generation refused: invoice is not xrechnung_ready.",
+        )
 
     clean_num = re.sub(r"[^A-Za-z0-9_-]", "_", str(inv.get("invoice_number") or "invoice"))
     filename = f"XRechnung_{clean_num}.xml"
@@ -1024,32 +1025,13 @@ async def api_dashboard_summary(
     user_id = str(current_user.id)
     invoices = get_all_invoices(user_id=user_id)
 
-    # Determine effective reference date:
-    # If reference_date is provided, use it; otherwise if all unpaid due dates fall in a specific
-    # cohort month (e.g. Nov 2026 in the test set), compute relative to today (2026-11-18) or earliest open window.
-    today = datetime.date(2026, 11, 18)
+    # Determine effective reference date from the real current date, unless reference_date override is provided.
+    today = datetime.date.today()
     if reference_date and re.match(r"^\d{4}-\d{2}-\d{2}$", reference_date):
         try:
             today = datetime.datetime.strptime(reference_date, "%Y-%m-%d").date()
         except Exception:
             pass
-    else:
-        # Check unpaid due dates: if there are unpaid invoices in November 2026, use 2026-11-05 as active demo anchor
-        # or include the whole current month of November 2026 so both "due this week" and "due this month" show rich live data!
-        unpaid_dues = []
-        for inv in invoices:
-            if str(inv.get("payment_status") or "").lower() not in ("paid", "bezahlt") and inv.get("document_type") != "credit_note":
-                d_str = parse_german_date(inv.get("due_date"))
-                if d_str and re.match(r"^\d{4}-\d{2}-\d{2}$", d_str):
-                    try:
-                        unpaid_dues.append(datetime.datetime.strptime(d_str, "%Y-%m-%d").date())
-                    except Exception:
-                        pass
-        if unpaid_dues:
-            # Anchor at the start of the active due cohort week if all due dates are in the same month
-            earliest_due = min(unpaid_dues)
-            if earliest_due.year == 2026 and earliest_due.month in (10, 11):
-                today = earliest_due
 
     week_end = today + datetime.timedelta(days=7)
 

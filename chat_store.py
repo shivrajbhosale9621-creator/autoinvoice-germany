@@ -347,7 +347,7 @@ DEFAULT_SETTINGS = {
     "tax_number": "109/5720/1842",
     "iban": "DE89 3704 0044 0532 0130 00",
     "bic": "COBADEFFXXX",
-    "leitweg_id": "04011000-1234512345-06",
+    "leitweg_id": "",
     "datev_chart": "SKR03",
     "datev_consultant_number": "12345",
     "datev_client_number": "40217",

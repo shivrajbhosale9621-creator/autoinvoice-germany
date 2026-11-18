@@ -17,7 +17,7 @@
  */
 
 import { api } from "./api.js";
-import { charts, formatMoneyDE, formatNumberDE, formatDateDE } from "./charts.js";
+import { charts, formatMoneyDE, formatNumberDE, formatDateDE, parseGermanDecimal } from "./charts.js";
 import { initUpload } from "./upload.js";
 import { initChat } from "./chat.js";
 
@@ -83,6 +83,18 @@ const I18N = {
     monthend_checklist_title: "MONATSABSCHLUSS-CHECKLISTE FÜR DIE BUCHHALTUNG",
     settings_title: "UNTERNEHMENSPROFIL, DATEV-KONTENRAHMEN & GEBIETSSCHEMA (LOCALE)",
     btn_save_settings: "EINSTELLUNGEN SPEICHERN",
+    settings_company_hdr: "Firmendaten",
+    lbl_company_name: "Firmenname",
+    lbl_company_address: "Firmenadresse",
+    lbl_company_vat: "USt-IdNr.",
+    settings_datev_hdr: "DATEV-Export",
+    settings_locale_hdr: "Sprache und Formate",
+    th_skonto_deadline: "Skontofrist",
+    th_skonto_saving: "Skontoersparnis",
+    th_net_payable: "Nettobetrag",
+    th_payment_terms: "Zahlungsbedingungen",
+    th_total_gross: "Gesamtbetrag brutto",
+    chat_new_session: "Neue Unterhaltung",
   },
   en: {
     brand_sub: "DATEV • XRECHNUNG",
@@ -145,6 +157,18 @@ const I18N = {
     monthend_checklist_title: "MONTH-END BOOKKEEPER CHECKLIST",
     settings_title: "COMPANY PROFILE, DATEV CHART OF ACCOUNTS & LOCALE",
     btn_save_settings: "SAVE SETTINGS",
+    settings_company_hdr: "Company details",
+    lbl_company_name: "Company name",
+    lbl_company_address: "Company address",
+    lbl_company_vat: "VAT ID",
+    settings_datev_hdr: "DATEV export",
+    settings_locale_hdr: "Language and formats",
+    th_skonto_deadline: "Discount deadline",
+    th_skonto_saving: "Discount saving",
+    th_net_payable: "Net payable",
+    th_payment_terms: "Payment terms",
+    th_total_gross: "Total gross",
+    chat_new_session: "New chat",
   },
 };
 
@@ -165,7 +189,7 @@ const state = {
     tax_number: "109/5720/1842",
     iban: "DE89 3704 0044 0532 0130 00",
     bic: "COBADEFFXXX",
-    leitweg_id: "04011000-1234512345-06",
+    leitweg_id: "",
     datev_chart: "SKR03",
     datev_consultant_number: "12345",
     datev_client_number: "40217",
@@ -1196,13 +1220,13 @@ function renderInvoiceDetailView(inv) {
           <td><input type="text" class="detail-input ln-pos" value="${escapeHtml(it.pos || idx + 1)}" style="width:48px;"></td>
           <td><input type="text" class="detail-input ln-art" value="${escapeHtml(it.article_number || "")}" style="width:95px;"></td>
           <td><input type="text" class="detail-input ln-desc" value="${escapeHtml(it.description || "")}" style="min-width:210px;"></td>
-          <td><input type="number" step="any" class="detail-input ln-qty" value="${it.quantity ?? 1}" style="width:76px; text-align:right;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-qty" value="${it.quantity ?? 1}" style="width:76px; text-align:right;"></td>
           <td><input type="text" class="detail-input ln-unit" value="${escapeHtml(it.unit || "Stk")}" style="width:56px;"></td>
-          <td><input type="number" step="any" class="detail-input ln-pe" value="${it.price_unit ?? 1}" style="width:60px; text-align:right;"></td>
-          <td><input type="number" step="any" class="detail-input ln-price" value="${it.unit_price ?? 0}" style="width:92px; text-align:right;"></td>
-          <td><input type="number" step="any" class="detail-input ln-disc" value="${it.discount_percent ?? 0}" style="width:64px; text-align:right;"></td>
-          <td><input type="number" step="any" class="detail-input ln-total" value="${it.line_total ?? 0}" style="width:105px; text-align:right; font-weight:700;"></td>
-          <td><input type="number" step="any" class="detail-input ln-vat" value="${it.vat_rate ?? 19}" style="width:62px; text-align:right;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-pe" value="${it.price_unit ?? 1}" style="width:60px; text-align:right;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-price" value="${it.unit_price ?? 0}" style="width:92px; text-align:right;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-disc" value="${it.discount_percent ?? 0}" style="width:64px; text-align:right;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-total" value="${it.line_total ?? 0}" style="width:105px; text-align:right; font-weight:700;"></td>
+          <td><input type="text" inputmode="decimal" class="detail-input ln-vat" value="${it.vat_rate ?? 19}" style="width:62px; text-align:right;"></td>
           <td style="min-width:190px;">
             <span class="stamp-badge ${isFail ? "failed" : "paid"}">${lineSt}</span>
             ${
@@ -1222,9 +1246,9 @@ function renderInvoiceDetailView(inv) {
     .map(
       (vb, i) => `
       <tr class="detail-vat-row" data-idx="${i}">
-        <td><input type="number" step="any" class="detail-input vb-rate" value="${vb.rate ?? 19}" style="width:80px;"> %</td>
-        <td><input type="number" step="any" class="detail-input vb-net" value="${vb.net ?? 0}" style="width:140px; text-align:right;"> € (${formatMoneyDE(vb.net)})</td>
-        <td><input type="number" step="any" class="detail-input vb-vat" value="${vb.vat ?? 0}" style="width:140px; text-align:right;"> € (${formatMoneyDE(vb.vat)})</td>
+        <td><input type="text" inputmode="decimal" class="detail-input vb-rate" value="${vb.rate ?? 19}" style="width:80px;"> %</td>
+        <td><input type="text" inputmode="decimal" class="detail-input vb-net" value="${vb.net ?? 0}" style="width:140px; text-align:right;"> € (${formatMoneyDE(vb.net)})</td>
+        <td><input type="text" inputmode="decimal" class="detail-input vb-vat" value="${vb.vat ?? 0}" style="width:140px; text-align:right;"> € (${formatMoneyDE(vb.vat)})</td>
         <td class="mono-amount">${formatMoneyDE((parseFloat(vb.net) || 0) + (parseFloat(vb.vat) || 0))}</td>
       </tr>
     `
@@ -1382,13 +1406,13 @@ function renderInvoiceDetailView(inv) {
       <div class="field-item">
         <div class="field-label">SKONTO % / FRIST (${formatDateDE(inv.skonto_deadline)})</div>
         <div style="display:flex; gap:0.4rem;">
-          <input type="number" step="any" id="dt-skonto-percent" class="detail-input" value="${inv.skonto_percent ?? 0}" style="width:70px;" title="Skonto %">
+          <input type="text" inputmode="decimal" id="dt-skonto-percent" class="detail-input" value="${inv.skonto_percent ?? 0}" style="width:70px;" title="Skonto %">
           <input type="text" id="dt-skonto-deadline" class="detail-input" value="${escapeHtml(inv.skonto_deadline || "")}" placeholder="YYYY-MM-DD">
         </div>
       </div>
       <div class="field-item">
         <div class="field-label">SKONTO-ERSPARNIS (EUR)</div>
-        <input type="number" step="any" id="dt-skonto-amount" class="detail-input" value="${inv.skonto_amount ?? 0}">
+        <input type="text" inputmode="decimal" id="dt-skonto-amount" class="detail-input" value="${inv.skonto_amount ?? 0}">
       </div>
     </div>
 
@@ -1447,15 +1471,15 @@ function renderInvoiceDetailView(inv) {
         <div class="field-grid" style="grid-template-columns: 1fr;">
           <div class="field-item" style="display:flex; justify-content:space-between; align-items:center;">
             <span class="field-label" style="margin:0;">NETTOBETRAG GESAMT (${formatMoneyDE(inv.subtotal)})</span>
-            <input type="number" step="any" id="dt-subtotal" class="detail-input" value="${inv.subtotal ?? 0}" style="width:150px; text-align:right; font-weight:700;">
+            <input type="text" inputmode="decimal" id="dt-subtotal" class="detail-input" value="${inv.subtotal ?? 0}" style="width:150px; text-align:right; font-weight:700;">
           </div>
           <div class="field-item" style="display:flex; justify-content:space-between; align-items:center;">
             <span class="field-label" style="margin:0;">UMSATZSTEUER GESAMT (${formatMoneyDE(inv.tax_amount)})</span>
-            <input type="number" step="any" id="dt-tax-amount" class="detail-input" value="${inv.tax_amount ?? 0}" style="width:150px; text-align:right; font-weight:700;">
+            <input type="text" inputmode="decimal" id="dt-tax-amount" class="detail-input" value="${inv.tax_amount ?? 0}" style="width:150px; text-align:right; font-weight:700;">
           </div>
           <div class="field-item" style="display:flex; justify-content:space-between; align-items:center; border-color:var(--ink);">
             <span class="field-label" style="margin:0; color:var(--ink);">BRUTTOBETRAG GESAMT (${formatMoneyDE(inv.total_amount)})</span>
-            <input type="number" step="any" id="dt-total-amount" class="detail-input" value="${inv.total_amount ?? 0}" style="width:150px; text-align:right; font-weight:700; font-size:1rem;">
+            <input type="text" inputmode="decimal" id="dt-total-amount" class="detail-input" value="${inv.total_amount ?? 0}" style="width:150px; text-align:right; font-weight:700; font-size:1rem;">
           </div>
         </div>
       </div>
@@ -1488,7 +1512,11 @@ function renderInvoiceDetailView(inv) {
 
   document.getElementById("btn-detail-fill-leitweg")?.addEventListener("click", async () => {
     const lwInput = document.getElementById("dt-leitweg-id");
-    const defaultLw = state.settings?.leitweg_id || "04011000-1234512345-06";
+    const defaultLw = (state.settings?.leitweg_id || "").trim();
+    if (!defaultLw) {
+      showToast("Keine Standard-Leitweg-ID in den Einstellungen hinterlegt. Bitte erst in den Einstellungen speichern.", "error");
+      return;
+    }
     if (lwInput) lwInput.value = defaultLw;
     await saveInvoiceDetailChanges(docId);
   });
@@ -1524,26 +1552,56 @@ function renderInvoiceDetailView(inv) {
 }
 
 async function saveInvoiceDetailChanges(docId) {
-  const lineRows = Array.from(document.querySelectorAll(".detail-line-row"));
-  const updatedItems = lineRows.map((tr) => ({
-    pos: tr.querySelector(".ln-pos")?.value.trim() || "1",
-    article_number: tr.querySelector(".ln-art")?.value.trim() || "",
-    description: tr.querySelector(".ln-desc")?.value.trim() || "",
-    quantity: parseFloat(tr.querySelector(".ln-qty")?.value) || 0,
-    unit: tr.querySelector(".ln-unit")?.value.trim() || "Stk",
-    price_unit: parseFloat(tr.querySelector(".ln-pe")?.value) || 1,
-    unit_price: parseFloat(tr.querySelector(".ln-price")?.value) || 0,
-    discount_percent: parseFloat(tr.querySelector(".ln-disc")?.value) || 0,
-    line_total: parseFloat(tr.querySelector(".ln-total")?.value) || 0,
-    vat_rate: parseFloat(tr.querySelector(".ln-vat")?.value) || 19,
-  }));
+  const parseFieldStrict = (rawVal, fieldLabel) => {
+    const val = parseGermanDecimal(rawVal);
+    if (val === null) {
+      throw new Error(`Ungültiger Zahlenwert im Feld "${fieldLabel}": "${rawVal}"`);
+    }
+    return val;
+  };
 
-  const vatRows = Array.from(document.querySelectorAll(".detail-vat-row"));
-  const updatedVat = vatRows.map((tr) => ({
-    rate: parseFloat(tr.querySelector(".vb-rate")?.value) || 19,
-    net: parseFloat(tr.querySelector(".vb-net")?.value) || 0,
-    vat: parseFloat(tr.querySelector(".vb-vat")?.value) || 0,
-  }));
+  let updatedItems = [];
+  let updatedVat = [];
+  let skontoPercent = 0;
+  let skontoAmount = 0;
+  let subtotalVal = 0;
+  let taxAmountVal = 0;
+  let totalAmountVal = 0;
+
+  try {
+    const lineRows = Array.from(document.querySelectorAll(".detail-line-row"));
+    updatedItems = lineRows.map((tr, idx) => {
+      const pos = tr.querySelector(".ln-pos")?.value.trim() || String(idx + 1);
+      return {
+        pos,
+        article_number: tr.querySelector(".ln-art")?.value.trim() || "",
+        description: tr.querySelector(".ln-desc")?.value.trim() || "",
+        quantity: parseFieldStrict(tr.querySelector(".ln-qty")?.value, `Position ${pos} Menge (quantity)`),
+        unit: tr.querySelector(".ln-unit")?.value.trim() || "Stk",
+        price_unit: parseFieldStrict(tr.querySelector(".ln-pe")?.value, `Position ${pos} Preiseinheit (price_unit)`),
+        unit_price: parseFieldStrict(tr.querySelector(".ln-price")?.value, `Position ${pos} Einzelpreis (unit_price)`),
+        discount_percent: parseFieldStrict(tr.querySelector(".ln-disc")?.value, `Position ${pos} Rabatt % (discount_percent)`),
+        line_total: parseFieldStrict(tr.querySelector(".ln-total")?.value, `Position ${pos} Gesamtbetrag (line_total)`),
+        vat_rate: parseFieldStrict(tr.querySelector(".ln-vat")?.value, `Position ${pos} USt % (vat_rate)`),
+      };
+    });
+
+    const vatRows = Array.from(document.querySelectorAll(".detail-vat-row"));
+    updatedVat = vatRows.map((tr, idx) => ({
+      rate: parseFieldStrict(tr.querySelector(".vb-rate")?.value, `USt-Aufschlüsselung Zeile ${idx + 1} Steuersatz (rate)`),
+      net: parseFieldStrict(tr.querySelector(".vb-net")?.value, `USt-Aufschlüsselung Zeile ${idx + 1} Nettobetrag (net)`),
+      vat: parseFieldStrict(tr.querySelector(".vb-vat")?.value, `USt-Aufschlüsselung Zeile ${idx + 1} USt-Betrag (vat)`),
+    }));
+
+    skontoPercent = parseFieldStrict(document.getElementById("dt-skonto-percent")?.value, "Skonto % (skonto_percent)");
+    skontoAmount = parseFieldStrict(document.getElementById("dt-skonto-amount")?.value, "Skonto-Ersparnis (skonto_amount)");
+    subtotalVal = parseFieldStrict(document.getElementById("dt-subtotal")?.value, "Nettobetrag Gesamt (subtotal)");
+    taxAmountVal = parseFieldStrict(document.getElementById("dt-tax-amount")?.value, "Umsatzsteuer Gesamt (tax_amount)");
+    totalAmountVal = parseFieldStrict(document.getElementById("dt-total-amount")?.value, "Bruttobetrag Gesamt (total_amount)");
+  } catch (validationErr) {
+    showToast(validationErr.message, "error");
+    return false;
+  }
 
   const payload = {
     invoice_number: document.getElementById("dt-invoice-number")?.value.trim(),
@@ -1563,12 +1621,12 @@ async function saveInvoiceDetailChanges(docId) {
     due_date: document.getElementById("dt-due-date")?.value.trim(),
     payment_terms: document.getElementById("dt-payment-terms")?.value.trim(),
     skonto_terms: document.getElementById("dt-skonto-terms")?.value.trim(),
-    skonto_percent: parseFloat(document.getElementById("dt-skonto-percent")?.value) || 0,
+    skonto_percent: skontoPercent,
     skonto_deadline: document.getElementById("dt-skonto-deadline")?.value.trim(),
-    skonto_amount: parseFloat(document.getElementById("dt-skonto-amount")?.value) || 0,
-    subtotal: parseFloat(document.getElementById("dt-subtotal")?.value) || 0,
-    tax_amount: parseFloat(document.getElementById("dt-tax-amount")?.value) || 0,
-    total_amount: parseFloat(document.getElementById("dt-total-amount")?.value) || 0,
+    skonto_amount: skontoAmount,
+    subtotal: subtotalVal,
+    tax_amount: taxAmountVal,
+    total_amount: totalAmountVal,
     line_items: updatedItems,
     vat_breakdown: updatedVat,
   };
@@ -1579,8 +1637,10 @@ async function saveInvoiceDetailChanges(docId) {
     renderInvoiceDetailView(res.invoice);
     await refreshData();
     showToast("Beleg in SQLite gespeichert und 9-Stufen-Prüfung aktualisiert.", "success");
+    return true;
   } catch (err) {
     showToast(err.message || "Fehler beim Speichern", "error");
+    return false;
   }
 }
 
