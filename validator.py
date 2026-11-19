@@ -339,7 +339,25 @@ def validate_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
     clean_vat_id = re.sub(r"\s+", "", raw_vat_id).upper()
     vies_status = str(inv.get("vies_status") or "unchecked").lower()
 
-    if not clean_vat_id:
+    EU_27_COUNTRIES = {
+        "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR",
+        "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL",
+        "PL", "PT", "RO", "SE", "SI", "SK",
+    }
+    supplier_country = str(inv.get("supplier_country") or "").strip().upper()
+    is_de_or_missing = (not supplier_country or supplier_country == "DE")
+    is_eu_non_de = (supplier_country in EU_27_COUNTRIES and supplier_country != "DE")
+
+    if not is_de_or_missing and not is_eu_non_de:
+        checks.append({
+            "code": "V5",
+            "name": "USt-IdNr. Format & VIES-Prüfung (Länderabhängig)",
+            "name_en": "Supplier VAT ID Format & VIES (Country-Aware)",
+            "status": "CANNOT VERIFY",
+            "message": f"Nicht-EU-Lieferant ({supplier_country}): Kein EU-USt-IdNr.-Formatschema anwendbar (CANNOT VERIFY).",
+            "discrepancies": [],
+        })
+    elif not clean_vat_id:
         checks.append({
             "code": "V5",
             "name": "USt-IdNr. Format & VIES-Prüfung (DE + 9 Ziffern)",
@@ -348,7 +366,7 @@ def validate_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
             "message": "Keine USt-IdNr. des Lieferanten extrahiert (CANNOT VERIFY).",
             "discrepancies": [],
         })
-    elif not re.match(r"^DE\d{9}$", clean_vat_id):
+    elif is_de_or_missing and not re.match(r"^DE\d{9}$", clean_vat_id):
         msg_de = f"Lieferanten-USt-IdNr. ungültig: Erwartet Format 'DE' + 9 Ziffern, Gedruckt '{raw_vat_id}'."
         checks.append({
             "code": "V5",
@@ -364,12 +382,28 @@ def validate_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
                 "message": msg_de,
             }],
         })
-    elif vies_status == "invalid":
-        msg_de = f"USt-IdNr. '{clean_vat_id}' hat das Format DE+9 Ziffern, wurde aber vom EU-VIES-Dienst als UNGÜLTIG gemeldet."
+    elif is_eu_non_de and not re.match(r"^[A-Z]{2}[0-9A-Za-z]{8,12}$", clean_vat_id):
+        msg_de = f"EU-Lieferanten-USt-IdNr. ({supplier_country}) ungültig: Erwartet Format '^[A-Z]{{2}}[0-9A-Za-z]{{8,12}}$', Gedruckt '{raw_vat_id}'."
         checks.append({
             "code": "V5",
-            "name": "USt-IdNr. Format & VIES-Prüfung (DE + 9 Ziffern)",
-            "name_en": "Supplier VAT ID Format (DE + 9 digits) & VIES",
+            "name": "USt-IdNr. Format & VIES-Prüfung (EU)",
+            "name_en": "Supplier VAT ID Format (EU) & VIES",
+            "status": "FAIL",
+            "message": msg_de,
+            "discrepancies": [{
+                "line": "USt-IdNr.",
+                "expected": f"{supplier_country} + 8-12 alphanumerische Zeichen",
+                "printed": raw_vat_id,
+                "difference": "Formatfehler",
+                "message": msg_de,
+            }],
+        })
+    elif vies_status == "invalid":
+        msg_de = f"USt-IdNr. '{clean_vat_id}' wurde vom EU-VIES-Dienst als UNGÜLTIG gemeldet."
+        checks.append({
+            "code": "V5",
+            "name": "USt-IdNr. Format & VIES-Prüfung",
+            "name_en": "Supplier VAT ID Format & VIES",
             "status": "FAIL",
             "message": msg_de,
             "discrepancies": [{
@@ -382,12 +416,13 @@ def validate_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
         })
     else:
         vies_note = "VIES bestätigt" if vies_status == "valid" else "VIES aktuell nicht erreichbar / ungeprüft"
+        fmt_desc = "DE + 9 Ziffern" if is_de_or_missing else f"EU-Format ({supplier_country})"
         checks.append({
             "code": "V5",
-            "name": "USt-IdNr. Format & VIES-Prüfung (DE + 9 Ziffern)",
-            "name_en": "Supplier VAT ID Format (DE + 9 digits) & VIES",
+            "name": "USt-IdNr. Format & VIES-Prüfung",
+            "name_en": "Supplier VAT ID Format & VIES",
             "status": "PASS",
-            "message": f"USt-IdNr. {clean_vat_id} entspricht DE + 9 Ziffern ({vies_note}).",
+            "message": f"USt-IdNr. {clean_vat_id} entspricht {fmt_desc} ({vies_note}).",
             "discrepancies": [],
         })
 

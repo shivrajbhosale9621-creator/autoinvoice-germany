@@ -227,11 +227,27 @@ export const api = {
     return data;
   },
 
-  async uploadInvoice(file, conversationId = "", userId = "") {
+  async convertInvoiceToEur(docId, { fxRate = null, taxTreatment = null, sourceCurrency = null } = {}) {
+    const body = {};
+    if (fxRate !== null && String(fxRate).trim() !== "") body.fx_rate = fxRate;
+    if (taxTreatment) body.tax_treatment = taxTreatment;
+    if (sourceCurrency) body.source_currency = sourceCurrency;
+    const res = await request(`${API_BASE}/api/invoice/${encodeURIComponent(docId)}/convert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.detail || "Währungsumrechnung fehlgeschlagen");
+    return data;
+  },
+
+  async uploadInvoice(file, conversationId = "", userId = "", foreign = false) {
     const formData = new FormData();
     formData.append("file", file);
     if (conversationId) formData.append("conversation_id", conversationId);
     if (userId) formData.append("user_id", userId);
+    if (foreign) formData.append("foreign", "true");
 
     const res = await request(`${API_BASE}/api/invoice/upload`, {
       method: "POST",

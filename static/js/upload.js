@@ -125,7 +125,8 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
 
       try {
         showToast(`Verarbeite Beleg ${i + 1}/${validFiles.length}: "${file.name}"...`, "info");
-        const res = await api.uploadInvoice(file, conversationId, userId);
+        const isForeign = Boolean(document.getElementById("checkbox-foreign-invoice")?.checked);
+        const res = await api.uploadInvoice(file, conversationId, userId, isForeign);
 
         clearInterval(timerInterval);
         setIndeterminateProgress(false);

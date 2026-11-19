@@ -95,6 +95,21 @@ const I18N = {
     th_payment_terms: "Zahlungsbedingungen",
     th_total_gross: "Gesamtbetrag brutto",
     chat_new_session: "Neue Unterhaltung",
+    upload_foreign_checkbox: "Auslandsrechnung / Foreign invoice",
+    upload_foreign_hint: "Fremdwährung & KI-Extraktion (Groq)",
+    fx_section_title: "Fremdwährung, EZB-Umrechnung & Steuerbehandlung",
+    lbl_supplier_country: "Lieferantenland (ISO)",
+    lbl_source_currency: "Ausgangswährung",
+    lbl_fx_rate: "Wechselkurs (Fremdwährung je 1 EUR)",
+    lbl_fx_date_source: "Kursdatum & Quelle",
+    lbl_tax_treatment: "Steuerbehandlung",
+    tt_standard: "Regelbesteuerung (Standard)",
+    tt_reverse_charge: "Reverse Charge (§ 13b UStG)",
+    tt_import_no_vat: "Import / Drittland (ohne USt)",
+    lbl_original_amounts: "Originalbeträge (Ausgangswährung)",
+    lbl_eur_amounts: "Umgerechnete EUR-Beträge",
+    btn_convert_eur: "In EUR umrechnen",
+    lbl_suggested_prefix: "Vorschlag:",
   },
   en: {
     brand_sub: "DATEV • XRECHNUNG",
@@ -169,6 +184,21 @@ const I18N = {
     th_payment_terms: "Payment terms",
     th_total_gross: "Total gross",
     chat_new_session: "New chat",
+    upload_foreign_checkbox: "Auslandsrechnung / Foreign invoice",
+    upload_foreign_hint: "Foreign currency & AI extraction (Groq)",
+    fx_section_title: "Foreign Currency, ECB Conversion & Tax Treatment",
+    lbl_supplier_country: "Supplier country (ISO)",
+    lbl_source_currency: "Source currency",
+    lbl_fx_rate: "FX rate (foreign per 1 EUR)",
+    lbl_fx_date_source: "Rate date & source",
+    lbl_tax_treatment: "Tax treatment",
+    tt_standard: "Standard VAT (Regelbesteuerung)",
+    tt_reverse_charge: "Reverse charge (Sec. 13b UStG)",
+    tt_import_no_vat: "Import / non-EU (no VAT)",
+    lbl_original_amounts: "Original amounts (source currency)",
+    lbl_eur_amounts: "Converted EUR amounts",
+    btn_convert_eur: "Convert to EUR",
+    lbl_suggested_prefix: "Suggested:",
   },
 };
 
@@ -1165,6 +1195,19 @@ export async function openInvoiceDetail(identifier) {
   }
 }
 
+const EU_NON_DE_SET = new Set([
+  "AT", "BE", "BG", "CY", "CZ", "DK", "EE", "ES", "FI", "FR",
+  "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL",
+  "PL", "PT", "RO", "SE", "SI", "SK",
+]);
+
+function suggestTaxTreatmentJS(countryCode) {
+  const cc = String(countryCode || "").trim().toUpperCase();
+  if (!cc || cc === "DE") return "standard";
+  if (EU_NON_DE_SET.has(cc)) return "reverse_charge_13b";
+  return "import_no_vat";
+}
+
 function renderInvoiceDetailView(inv) {
   const container = document.getElementById("invoice-detail-container");
   if (!container || !inv) return;
@@ -1418,6 +1461,66 @@ function renderInvoiceDetailView(inv) {
       </div>
     </div>
 
+    <!-- Foreign Currency, FX Conversion & Tax Treatment Panel (Tasks 3, 4, 7) -->
+    ${(() => {
+      const srcCcy = (inv.source_currency || inv.currency || "EUR").toUpperCase();
+      const supCountry = (inv.supplier_country || "").toUpperCase();
+      const suggestedTt = suggestTaxTreatmentJS(supCountry);
+      const activeTt = inv.tax_treatment || suggestedTt;
+      const fxRate = Number(inv.fx_rate || 1.0);
+      const fxDate = inv.fx_rate_date || "-";
+      const fxSource = inv.fx_rate_source || "-";
+      const origGross = Number(inv.original_gross || (srcCcy !== "EUR" ? inv.total_amount : 0) || 0);
+      const origNet = Number(inv.original_net || (srcCcy !== "EUR" ? inv.subtotal : 0) || 0);
+      const origVat = Number(inv.original_vat || (srcCcy !== "EUR" ? inv.tax_amount : 0) || 0);
+      const suggestedLabel = suggestedTt === "reverse_charge_13b" ? t("tt_reverse_charge") : (suggestedTt === "import_no_vat" ? t("tt_import_no_vat") : t("tt_standard"));
+      return `
+      <div style="border:1px solid var(--hairline); background:var(--paper-raised); padding:1rem; margin-bottom:1.25rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+          <h3 class="settings-section-heading" style="margin:0; border:none;">${t("fx_section_title")}</h3>
+          <button type="button" class="btn-primary" id="btn-detail-convert-eur" style="font-size:0.75rem;">${t("btn_convert_eur")}</button>
+        </div>
+        <div class="field-grid" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="field-item">
+            <div class="field-label">${t("lbl_supplier_country")}</div>
+            <input type="text" id="dt-supplier-country" class="detail-input" maxlength="2" placeholder="DE / PL / IN" value="${escapeHtml(supCountry)}">
+          </div>
+          <div class="field-item">
+            <div class="field-label">${t("lbl_source_currency")}</div>
+            <input type="text" id="dt-source-currency" class="detail-input" maxlength="3" value="${escapeHtml(srcCcy)}">
+          </div>
+          <div class="field-item">
+            <div class="field-label">${t("lbl_fx_rate")}</div>
+            <input type="text" inputmode="decimal" id="dt-fx-rate" class="detail-input" placeholder="ECB auto or manual" value="${fxRate !== 1.0 ? fxRate : ""}">
+          </div>
+          <div class="field-item">
+            <div class="field-label">${t("lbl_fx_date_source")}</div>
+            <div style="font-family:var(--font-mono); font-size:0.8rem; padding-top:4px;">
+              <strong>${escapeHtml(fxSource)}</strong> &bull; ${escapeHtml(fxDate === "-" ? "-" : formatDateDE(fxDate))}
+            </div>
+          </div>
+          <div class="field-item" style="grid-column: span 2;">
+            <div class="field-label">${t("lbl_tax_treatment")} <span style="color:var(--ink-muted); font-weight:400;">(${t("lbl_suggested_prefix")} ${escapeHtml(suggestedLabel)})</span></div>
+            <select id="dt-tax-treatment" class="detail-input">
+              <option value="standard" ${activeTt === "standard" ? "selected" : ""}>${t("tt_standard")}</option>
+              <option value="reverse_charge_13b" ${activeTt === "reverse_charge_13b" ? "selected" : ""}>${t("tt_reverse_charge")}</option>
+              <option value="import_no_vat" ${activeTt === "import_no_vat" ? "selected" : ""}>${t("tt_import_no_vat")}</option>
+            </select>
+          </div>
+          <div class="field-item" style="grid-column: span 2;">
+            <div class="field-label">${t("lbl_original_amounts")} &rarr; ${t("lbl_eur_amounts")}</div>
+            <div style="font-family:var(--font-mono); font-size:0.78rem; padding-top:4px;">
+              ${srcCcy !== "EUR" || origGross > 0
+                ? `<strong>${formatNumberDE(origNet)} / ${formatNumberDE(origVat)} / ${formatNumberDE(origGross)} ${escapeHtml(srcCcy)}</strong> &rarr; <strong>${formatMoneyDE(inv.subtotal)} / ${formatMoneyDE(inv.tax_amount)} / ${formatMoneyDE(inv.total_amount)}</strong>`
+                : `<span>${formatMoneyDE(inv.subtotal)} / ${formatMoneyDE(inv.tax_amount)} / ${formatMoneyDE(inv.total_amount)} (EUR)</span>`
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+      `;
+    })()}
+
     <!-- Line Items Table with Line-Level Validation Flags -->
     <div style="margin-bottom:1.5rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
@@ -1498,6 +1601,29 @@ function renderInvoiceDetailView(inv) {
 
   // Bind Detail Page Actions
   document.getElementById("btn-detail-save")?.addEventListener("click", () => saveInvoiceDetailChanges(docId));
+
+  document.getElementById("btn-detail-convert-eur")?.addEventListener("click", async () => {
+    const rawRate = document.getElementById("dt-fx-rate")?.value.trim() || "";
+    let manualRate = null;
+    if (rawRate !== "") {
+      manualRate = parseGermanDecimal(rawRate);
+      if (manualRate === null || manualRate <= 0) {
+        showToast(`Ungültiger Wechselkurs: "${rawRate}"`, "error");
+        return;
+      }
+    }
+    const taxTreatment = document.getElementById("dt-tax-treatment")?.value || "standard";
+    const sourceCurrency = document.getElementById("dt-source-currency")?.value.trim().toUpperCase() || inv.source_currency;
+    try {
+      const res = await api.convertInvoiceToEur(docId, { fxRate: manualRate, taxTreatment, sourceCurrency });
+      state.currentDetailInvoice = res.invoice;
+      renderInvoiceDetailView(res.invoice);
+      await refreshData();
+      showToast(res.message || "In EUR umgerechnet.", "success");
+    } catch (err) {
+      showToast(err.message || "Umrechnung fehlgeschlagen", "error");
+    }
+  });
 
   document.getElementById("btn-detail-vies-recheck")?.addEventListener("click", async () => {
     try {
@@ -1618,6 +1744,9 @@ async function saveInvoiceDetailChanges(docId) {
     vendor_bic: document.getElementById("dt-vendor-bic")?.value.trim(),
     buyer_name: document.getElementById("dt-buyer-name")?.value.trim(),
     buyer_address: document.getElementById("dt-buyer-address")?.value.trim(),
+    supplier_country: document.getElementById("dt-supplier-country")?.value.trim().toUpperCase(),
+    source_currency: document.getElementById("dt-source-currency")?.value.trim().toUpperCase(),
+    tax_treatment: document.getElementById("dt-tax-treatment")?.value,
     invoice_date: document.getElementById("dt-invoice-date")?.value.trim(),
     delivery_date: document.getElementById("dt-delivery-date")?.value.trim(),
     due_date: document.getElementById("dt-due-date")?.value.trim(),

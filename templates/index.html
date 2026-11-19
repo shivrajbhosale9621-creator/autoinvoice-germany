@@ -526,6 +526,13 @@
         <!-- =============================================================== -->
         <section id="view-upload" class="view-section">
           <div class="upload-center-container">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; padding:0.6rem 0.9rem; border:1px solid var(--hairline); background:var(--paper-raised);">
+              <label style="display:flex; align-items:center; gap:0.55rem; cursor:pointer; font-family:var(--font-mono); font-size:0.78rem; font-weight:600; color:var(--ink);">
+                <input type="checkbox" id="checkbox-foreign-invoice" style="width:16px; height:16px; accent-color:var(--ink);">
+                <span data-i18n="upload_foreign_checkbox">Auslandsrechnung / Foreign invoice</span>
+              </label>
+              <span style="font-family:var(--font-mono); font-size:0.72rem; color:var(--ink-muted);" data-i18n="upload_foreign_hint">Fremdwährung &amp; KI-Extraktion (Groq)</span>
+            </div>
             <div class="dropzone-card" id="dropzone-card">
               <input type="file" id="file-input-upload" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" multiple>
               <div class="incoming-stamp">[ RECHNUNGSEINGANG ]</div>

@@ -69,6 +69,15 @@ if _HAS_SQLALCHEMY:
         datev_booked: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
         datev_account: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
         payment_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+        source_currency: Mapped[Optional[str]] = mapped_column(String(16), default="EUR", nullable=True)
+        fx_rate: Mapped[Optional[float]] = mapped_column(Float, default=1.0, nullable=True)
+        fx_rate_date: Mapped[Optional[str]] = mapped_column(String(32), default="", nullable=True)
+        fx_rate_source: Mapped[Optional[str]] = mapped_column(String(32), default="", nullable=True)
+        tax_treatment: Mapped[Optional[str]] = mapped_column(String(32), default="standard", nullable=True)
+        original_net: Mapped[Optional[float]] = mapped_column(Float, default=0.0, nullable=True)
+        original_vat: Mapped[Optional[float]] = mapped_column(Float, default=0.0, nullable=True)
+        original_gross: Mapped[Optional[float]] = mapped_column(Float, default=0.0, nullable=True)
+        supplier_country: Mapped[Optional[str]] = mapped_column(String(8), default="", nullable=True)
         uploaded_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
         created_at: Mapped[Optional[datetime]] = mapped_column(
             DateTime(timezone=True),

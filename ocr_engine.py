@@ -670,13 +670,18 @@ def _structuring_is_empty(parsed: dict) -> bool:
     return (not vendor or vendor.lower() == "unknown vendor") and total == 0.0
 
 
-def structure_invoice_json(ocr_text: str, file_name: str = "") -> dict:
+def structure_invoice_json(ocr_text: str, file_name: str = "", force_llm: bool = False) -> dict:
     if not ocr_text or not ocr_text.strip():
         raise StructuringError("No text could be extracted from the document.")
 
-    det_parsed = parse_german_invoice_text(ocr_text, file_name=file_name)
-    if not _structuring_is_empty(det_parsed) and det_parsed.get("line_items"):
-        return det_parsed
+    if force_llm and not GROQ_API_KEY:
+        raise StructuringError("Foreign invoice conversion needs the Groq API key. Set GROQ_API_KEY and restart.")
+
+    det_parsed = {}
+    if not force_llm:
+        det_parsed = parse_german_invoice_text(ocr_text, file_name=file_name)
+        if not _structuring_is_empty(det_parsed) and det_parsed.get("line_items"):
+            return det_parsed
 
     if GROQ_API_KEY:
         try:
@@ -694,7 +699,7 @@ def structure_invoice_json(ocr_text: str, file_name: str = "") -> dict:
 Rule: Extract exactly what is printed. Never fix or recalculate a wrong printed number.
 Extract:
 - invoice_number, document_type ("invoice" or "credit_note")
-- vendor_name, vendor_address, vat_id (USt-IdNr), tax_number (Steuer-Nr), vendor_iban, vendor_bic
+- vendor_name, vendor_address, supplier_country (ISO 2-letter code, e.g. PL, IN, DE), vat_id (USt-IdNr), tax_number (Steuer-Nr), vendor_iban, vendor_bic
 - buyer_name, buyer_address, leitweg_id
 - invoice_date (YYYY-MM-DD), delivery_date (YYYY-MM-DD), due_date (YYYY-MM-DD)
 - payment_terms, skonto_terms, skonto_percent, skonto_days, skonto_deadline, skonto_amount
@@ -718,7 +723,7 @@ OCR TEXT:
         except Exception as exc:
             logger.warning("Groq LLM structuring fallback to deterministic parser: %s", exc)
 
-    if not _structuring_is_empty(det_parsed):
+    if not force_llm and not _structuring_is_empty(det_parsed):
         return det_parsed
 
     raise StructuringError("Could not structure this document. The file may not be a readable invoice.")
@@ -744,6 +749,7 @@ class OCRAgent:
         file_path: str,
         index_path: str = DEFAULT_INDEX_PATH,
         user_id: Optional[str] = None,
+        force_llm: bool = False,
     ) -> dict:
         file_name = os.path.basename(file_path)
         try:
@@ -770,7 +776,7 @@ class OCRAgent:
                 }
 
             t2 = time.time()
-            structured_json = structure_invoice_json(raw_ocr_text, file_name=file_name)
+            structured_json = structure_invoice_json(raw_ocr_text, file_name=file_name, force_llm=force_llm)
             t_structure = time.time() - t2
 
             t3 = time.time()

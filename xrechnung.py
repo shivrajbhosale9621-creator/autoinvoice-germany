@@ -230,8 +230,19 @@ def generate_xrechnung_xml(inv: Dict[str, Any], default_leitweg_id: str = "") ->
     delivery_date = parse_german_date(delivery_date_raw) if delivery_date_raw else ""
 
     currency = str(inv.get("currency") or "EUR").strip().upper()
-    if currency not in ("EUR", "USD", "GBP", "CHF"):
+    source_currency = str(inv.get("source_currency") or currency).strip().upper()
+    if source_currency != "EUR" and float(inv.get("fx_rate") or 0.0) > 0:
         currency = "EUR"
+    elif currency not in ("EUR", "USD", "GBP", "CHF"):
+        currency = "EUR"
+
+    tax_treatment = str(inv.get("tax_treatment") or "standard").strip()
+    tax_cat_map = {
+        "standard": "S",
+        "reverse_charge_13b": "AE",
+        "import_no_vat": "O",
+    }
+    tax_cat_id = tax_cat_map.get(tax_treatment, "S")
 
     NSMAP = {
         None: "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2",
@@ -262,6 +273,16 @@ def generate_xrechnung_xml(inv: Dict[str, Any], default_leitweg_id: str = "") ->
     etree.SubElement(root, CBC + "InvoiceTypeCode").text = type_code
     # BT-5 Document currency code
     etree.SubElement(root, CBC + "DocumentCurrencyCode").text = currency
+    # BT-22 Invoice Note (BG-1) for converted foreign-currency invoices
+    fx_rate_val = parse_numeric(inv.get("fx_rate"), 0.0)
+    orig_gross_val = parse_numeric(inv.get("original_gross"), 0.0)
+    fx_rate_source = str(inv.get("fx_rate_source") or "ECB").strip()
+    fx_rate_date = str(inv.get("fx_rate_date") or "").strip()
+    if source_currency != "EUR" and fx_rate_val > 0:
+        etree.SubElement(root, CBC + "Note").text = (
+            f"Original: {orig_gross_val:.2f} {source_currency}, "
+            f"{fx_rate_source} rate {fx_rate_val:.4f} {source_currency}/EUR on {fx_rate_date}"
+        )
     # BT-10 Mandatory BuyerReference (Leitweg-ID)
     etree.SubElement(root, CBC + "BuyerReference").text = leitweg_id
 
@@ -277,8 +298,9 @@ def generate_xrechnung_xml(inv: Dict[str, Any], default_leitweg_id: str = "") ->
     etree.SubElement(sup_addr, CBC + "StreetName").text = v_street
     etree.SubElement(sup_addr, CBC + "CityName").text = v_city
     etree.SubElement(sup_addr, CBC + "PostalZone").text = v_zip
+    sup_country_code = str(inv.get("supplier_country") or "DE").strip().upper()[:2] or "DE"
     sup_country = etree.SubElement(sup_addr, CAC + "Country")
-    etree.SubElement(sup_country, CBC + "IdentificationCode").text = "DE"
+    etree.SubElement(sup_country, CBC + "IdentificationCode").text = sup_country_code
 
     sup_tax = etree.SubElement(sup_party, CAC + "PartyTaxScheme")
     etree.SubElement(sup_tax, CBC + "CompanyID").text = vat_id
@@ -362,7 +384,7 @@ def generate_xrechnung_xml(inv: Dict[str, Any], default_leitweg_id: str = "") ->
         etree.SubElement(ts_sub, CBC + "TaxableAmount", currencyID=currency).text = _fmt_xml_dec(net_val, 2)
         etree.SubElement(ts_sub, CBC + "TaxAmount", currencyID=currency).text = _fmt_xml_dec(vat_val, 2)
         t_cat = etree.SubElement(ts_sub, CAC + "TaxCategory")
-        etree.SubElement(t_cat, CBC + "ID").text = "S" if r_val > 0 else "Z"
+        etree.SubElement(t_cat, CBC + "ID").text = tax_cat_id
         etree.SubElement(t_cat, CBC + "Percent").text = _fmt_xml_dec(r_val, 2)
         t_scheme = etree.SubElement(t_cat, CAC + "TaxScheme")
         etree.SubElement(t_scheme, CBC + "ID").text = "VAT"
@@ -400,7 +422,7 @@ def generate_xrechnung_xml(inv: Dict[str, Any], default_leitweg_id: str = "") ->
 
         cls_tax = etree.SubElement(item_el, CAC + "ClassifiedTaxCategory")
         r_line = parse_numeric(it.get("vat_rate"), 19.0)
-        etree.SubElement(cls_tax, CBC + "ID").text = "S" if r_line > 0 else "Z"
+        etree.SubElement(cls_tax, CBC + "ID").text = tax_cat_id
         etree.SubElement(cls_tax, CBC + "Percent").text = _fmt_xml_dec(r_line, 2)
         cls_scheme = etree.SubElement(cls_tax, CAC + "TaxScheme")
         etree.SubElement(cls_scheme, CBC + "ID").text = "VAT"

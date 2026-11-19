@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS invoices (
     datev_booked        INTEGER DEFAULT 0,
     datev_account       TEXT DEFAULT '',
     payment_run_id      TEXT DEFAULT '',
+    source_currency     TEXT DEFAULT 'EUR',
+    fx_rate             REAL DEFAULT 1.0,
+    fx_rate_date        TEXT DEFAULT '',
+    fx_rate_source      TEXT DEFAULT '',
+    tax_treatment       TEXT DEFAULT 'standard',
+    original_net        REAL DEFAULT 0.0,
+    original_vat        REAL DEFAULT 0.0,
+    original_gross      REAL DEFAULT 0.0,
+    supplier_country    TEXT DEFAULT '',
     uploaded_at         TEXT,
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, file_name)
@@ -283,6 +292,15 @@ _INVOICE_MIGRATION_COLUMNS = [
     ("datev_booked", "INTEGER DEFAULT 0"),
     ("datev_account", "TEXT DEFAULT ''"),
     ("payment_run_id", "TEXT DEFAULT ''"),
+    ("source_currency", "TEXT DEFAULT 'EUR'"),
+    ("fx_rate", "REAL DEFAULT 1.0"),
+    ("fx_rate_date", "TEXT DEFAULT ''"),
+    ("fx_rate_source", "TEXT DEFAULT ''"),
+    ("tax_treatment", "TEXT DEFAULT 'standard'"),
+    ("original_net", "REAL DEFAULT 0.0"),
+    ("original_vat", "REAL DEFAULT 0.0"),
+    ("original_gross", "REAL DEFAULT 0.0"),
+    ("supplier_country", "TEXT DEFAULT ''"),
 ]
 
 

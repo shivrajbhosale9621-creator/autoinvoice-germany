@@ -44,7 +44,8 @@ except ImportError:
         s = re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.basename(filename or "")).strip("._")
         return s or "upload.pdf"
 
-from config import DEFAULT_INBOX_DIR, CHAT_DB_PATH
+from config import DEFAULT_INBOX_DIR, CHAT_DB_PATH, GROQ_API_KEY
+from fx import convert_invoice_to_eur, FxRateUnavailableError
 from app.core.config import settings
 from app.core.database import get_db, AsyncSession
 from app.core.rate_limiter import limiter, rate_limit_handler, RateLimitExceeded
@@ -456,8 +457,19 @@ async def resolve_copilot_action(
 async def upload_invoice(
     file: UploadFile = File(...),
     conversation_id: Optional[str] = Form(None),
+    foreign: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
+    is_foreign = str(foreign or "").strip().lower() in ("true", "1", "yes", "on")
+    if is_foreign and not GROQ_API_KEY:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "status": "error",
+                "error": "Foreign invoice conversion needs the Groq API key. Set GROQ_API_KEY and restart.",
+            },
+        )
+
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -479,6 +491,7 @@ async def upload_invoice(
         agent.process_and_index_invoice,
         save_path,
         user_id=str(current_user.id),
+        force_llm=is_foreign,
     )
 
     if result.get("status") != "success":
@@ -517,6 +530,15 @@ async def upload_invoice(
             "due_date": extracted.get("due_date"),
             "payment_status": extracted.get("payment_status"),
             "currency": extracted.get("currency", "EUR"),
+            "source_currency": extracted.get("source_currency", extracted.get("currency", "EUR")),
+            "fx_rate": extracted.get("fx_rate", 1.0),
+            "fx_rate_date": extracted.get("fx_rate_date", ""),
+            "fx_rate_source": extracted.get("fx_rate_source", ""),
+            "tax_treatment": extracted.get("tax_treatment", "standard"),
+            "original_net": extracted.get("original_net", 0.0),
+            "original_vat": extracted.get("original_vat", 0.0),
+            "original_gross": extracted.get("original_gross", 0.0),
+            "supplier_country": extracted.get("supplier_country", ""),
             "validation_status": extracted.get("validation_status", "PASS"),
             "validation_report": extracted.get("validation_report", {}),
             "vies_status": extracted.get("vies_status", "unchecked"),
@@ -614,6 +636,83 @@ async def update_single_invoice(
     return {
         "status": "success",
         "message": "Beleg gespeichert und 9-Stufen-Validierung aktualisiert.",
+        "invoice": updated,
+    }
+
+
+@app.post("/api/invoice/{doc_id}/convert")
+async def convert_invoice_fx(
+    doc_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Task 3 & Task 7: Convert a foreign-currency invoice to EUR using ECB daily rates
+    or a user-provided manual FX rate, applying the user-confirmed tax_treatment.
+    """
+    user_id = str(current_user.id)
+    inv = get_invoice_by_identifier(doc_id, user_id=user_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Beleg wurde nicht gefunden.")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    raw_rate = body.get("fx_rate")
+    manual_rate = None
+    if raw_rate is not None and str(raw_rate).strip() != "":
+        try:
+            manual_rate = parse_numeric(raw_rate, 0.0)
+            if manual_rate <= 0:
+                raise ValueError("FX rate must be greater than 0.")
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid FX rate: {exc}")
+
+    tax_treatment = body.get("tax_treatment")
+    if body.get("source_currency"):
+        inv["source_currency"] = str(body["source_currency"]).strip().upper()
+
+    try:
+        converted = await asyncio.to_thread(
+            convert_invoice_to_eur,
+            inv,
+            manual_rate=manual_rate,
+            tax_treatment=tax_treatment,
+        )
+    except FxRateUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    updates = {
+        "currency": converted["currency"],
+        "source_currency": converted["source_currency"],
+        "fx_rate": converted["fx_rate"],
+        "fx_rate_date": converted["fx_rate_date"],
+        "fx_rate_source": converted["fx_rate_source"],
+        "tax_treatment": converted["tax_treatment"],
+        "original_net": converted["original_net"],
+        "original_vat": converted["original_vat"],
+        "original_gross": converted["original_gross"],
+        "subtotal": converted["subtotal"],
+        "tax_amount": converted["tax_amount"],
+        "total_amount": converted["total_amount"],
+        "line_items": converted["line_items"],
+        "vat_breakdown": converted["vat_breakdown"],
+    }
+    updated = await asyncio.to_thread(
+        update_invoice_record,
+        doc_id,
+        updates,
+        user_id=user_id,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Beleg wurde nicht gefunden.")
+    return {
+        "status": "success",
+        "message": f"Converted {updated['source_currency']} to EUR ({updated['fx_rate_source']} rate {updated['fx_rate']}).",
         "invoice": updated,
     }
 
