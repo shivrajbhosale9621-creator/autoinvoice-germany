@@ -213,6 +213,13 @@ export const api = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     return `${API_BASE}/api/invoice/${encodeURIComponent(docId)}/xrechnung${qs}`;
   },
+  getZugferdDownloadUrl(docId, leitwegId = "", useSettingsLeitweg = false) {
+    const params = new URLSearchParams();
+    if (leitwegId) params.set("leitweg_id", leitwegId);
+    if (useSettingsLeitweg) params.set("use_settings_leitweg", "true");
+    const qs = params.toString();
+    return `${API_BASE}/api/invoice/${encodeURIComponent(docId)}/zugferd${qs ? "?" + qs : ""}`;
+  },
 
   async deleteInvoice(docId, conversationId = "", userId = "") {
     const params = new URLSearchParams();
@@ -380,9 +387,10 @@ export const api = {
   },
 
   // Chat & Copilot Action Approvals
-  async chat({ message, userId, conversationId, file = null, idempotencyKey = null }) {
+  async chat({ message, userId, conversationId, file = null, idempotencyKey = null, lang = "de" }) {
     let body;
     let headers = {};
+    const effectiveLang = lang === "en" ? "en" : "de";
 
     if (file) {
       body = new FormData();
@@ -390,6 +398,7 @@ export const api = {
       body.append("message", message);
       if (conversationId) body.append("conversation_id", conversationId);
       if (idempotencyKey) body.append("idempotency_key", idempotencyKey);
+      body.append("lang", effectiveLang);
       body.append("file", file);
     } else {
       headers["Content-Type"] = "application/json";
@@ -398,6 +407,7 @@ export const api = {
         message: message,
         conversation_id: conversationId,
         idempotency_key: idempotencyKey,
+        lang: effectiveLang,
       });
     }
 
@@ -407,7 +417,7 @@ export const api = {
       body,
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "KI-Anfrage fehlgeschlagen");
+    if (!res.ok) throw new Error(data.error || data.detail || (effectiveLang === "en" ? "AI request failed" : "KI-Anfrage fehlgeschlagen"));
     return data;
   },
 

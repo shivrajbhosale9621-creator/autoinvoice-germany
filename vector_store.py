@@ -1243,6 +1243,49 @@ def update_invoice_record(
         norm["vies_checked_at"] = existing.get("vies_checked_at", "")
         norm["vies_details"] = existing.get("vies_details", "")
 
+    if updates.get("recompute_from_lines"):
+        recomputed_items = []
+        tax_treatment = str(norm.get("tax_treatment") or "standard").strip()
+        for it in (norm.get("line_items") or []):
+            it_copy = dict(it)
+            qty = parse_numeric(it_copy.get("quantity"), 1.0)
+            pu = parse_numeric(it_copy.get("price_unit"), 1.0)
+            if pu <= 0:
+                pu = 1.0
+            up = parse_numeric(it_copy.get("unit_price"), 0.0)
+            disc = parse_numeric(it_copy.get("discount_percent"), 0.0)
+            line_tot = round(qty * up / pu * (1.0 - disc / 100.0), 2)
+            it_copy["quantity"] = qty
+            it_copy["price_unit"] = pu
+            it_copy["unit_price"] = up
+            it_copy["discount_percent"] = disc
+            it_copy["line_total"] = line_tot
+            if tax_treatment in ("reverse_charge_13b", "import_no_vat"):
+                it_copy["vat_rate"] = 0.0
+            recomputed_items.append(it_copy)
+        norm["line_items"] = recomputed_items
+        norm["items"] = recomputed_items
+        subtotal = round(sum(float(it.get("line_total", 0.0)) for it in recomputed_items), 2)
+        if tax_treatment in ("reverse_charge_13b", "import_no_vat"):
+            norm["vat_breakdown"] = [{"rate": 0.0, "net": subtotal, "vat": 0.0}]
+            tax_amount = 0.0
+        else:
+            groups = {}
+            for it in recomputed_items:
+                r = round(parse_numeric(it.get("vat_rate"), 19.0), 2)
+                groups[r] = groups.get(r, 0.0) + float(it.get("line_total", 0.0))
+            vb_list = []
+            for r in sorted(groups.keys()):
+                n_val = round(groups[r], 2)
+                v_val = round(n_val * r / 100.0, 2)
+                vb_list.append({"rate": r, "net": n_val, "vat": v_val})
+            norm["vat_breakdown"] = vb_list
+            tax_amount = round(sum(vb["vat"] for vb in vb_list), 2)
+        norm["subtotal"] = subtotal
+        norm["tax_amount"] = tax_amount
+        norm["tax"] = tax_amount
+        norm["total_amount"] = round(subtotal + tax_amount, 2)
+
     from validator import validate_invoice
     val_report = validate_invoice(norm)
     val_status = val_report.get("overall_status", "PASS")

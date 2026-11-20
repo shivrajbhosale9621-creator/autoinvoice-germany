@@ -6,7 +6,8 @@
 import { api } from "./api.js";
 import { formatMoneyDE, formatDateDE } from "./charts.js";
 
-export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
+export function initUpload({ onUploadSuccess, getSessionContext, showToast, t: translate }) {
+  const t = typeof translate === "function" ? translate : (k) => k;
   const dropzone = document.getElementById("dropzone-card");
   const fileInput = document.getElementById("file-input-upload");
   const processingDocket = document.getElementById("processing-docket");
@@ -76,11 +77,11 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
     for (const file of files) {
       const ext = "." + file.name.split(".").pop().toLowerCase();
       if (!allowed.includes(ext)) {
-        showToast(`Übersprungen '${file.name}': Dateityp '${ext}' nicht unterstützt.`, "error");
+        showToast(`${t("up_skip_prefix")} '${file.name}': ${t("up_bad_type")} '${ext}'`, "error");
         continue;
       }
       if (file.size > 20 * 1024 * 1024) {
-        showToast(`Übersprungen '${file.name}': Datei größer als 20 MB.`, "error");
+        showToast(`${t("up_skip_prefix")} '${file.name}': ${t("up_too_large")}`, "error");
         continue;
       }
       validFiles.push(file);
@@ -100,7 +101,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
 
     for (let i = 0; i < validFiles.length; i++) {
       const file = validFiles[i];
-      const batchLabel = validFiles.length > 1 ? ` (${i + 1} von ${validFiles.length})` : "";
+      const batchLabel = validFiles.length > 1 ? ` (${i + 1}/${validFiles.length})` : "";
 
       const docketFileName = document.getElementById("docket-file-name");
       if (docketFileName) docketFileName.textContent = `${file.name}${batchLabel}`;
@@ -111,7 +112,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
       const timerInterval = setInterval(() => {
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
         const timerEl = document.getElementById("docket-timer");
-        if (timerEl) timerEl.textContent = `DAUER: ${elapsedSec}s`;
+        if (timerEl) timerEl.textContent = `${t("up_duration")}: ${elapsedSec}s`;
       }, 100);
 
       setStageStatus("stage-received", "completed", "+0.1s");
@@ -124,7 +125,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
       const { userId, conversationId } = getSessionContext();
 
       try {
-        showToast(`Verarbeite Beleg ${i + 1}/${validFiles.length}: "${file.name}"...`, "info");
+        showToast(`${t("up_processing")} ${i + 1}/${validFiles.length}: "${file.name}"...`, "info");
         const isForeign = Boolean(document.getElementById("checkbox-foreign-invoice")?.checked);
         const res = await api.uploadInvoice(file, conversationId, userId, isForeign);
 
@@ -134,7 +135,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
 
         const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         const timerEl = document.getElementById("docket-timer");
-        if (timerEl) timerEl.textContent = `ABGESCHLOSSEN IN ${totalElapsed}s`;
+        if (timerEl) timerEl.textContent = `${t("up_done_in")} ${totalElapsed}s`;
 
         const timings = res.timings || {};
         const tPre = Number(timings.preprocess_s || 0.1);
@@ -148,7 +149,7 @@ export function initUpload({ onUploadSuccess, getSessionContext, showToast }) {
         setStageStatus("stage-validated", "completed", `+${Math.min(tTotal, tPre + tOcr + tStruct + 0.1).toFixed(1)}s`);
         setStageStatus("stage-filed", "completed", `+${tTotal.toFixed(1)}s`);
 
-        showToast(`Beleg "${file.name}" extrahiert & geprüft (${tTotal.toFixed(1)}s)`, "success");
+        showToast(`${t("up_extracted_ok")} "${file.name}" (${tTotal.toFixed(1)}s)`, "success");
         lastRes = res;
         lastFilename = file.name;
 

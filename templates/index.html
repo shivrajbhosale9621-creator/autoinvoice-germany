@@ -439,17 +439,17 @@
                   </span>
                 </div>
                 <div class="quick-prompt-grid">
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-rank-vendors" data-prompt="Zeige die Gesamtbeträge und Anzahl der Rechnungen pro Lieferant">
-                    <strong>LIEFERANTEN-SALDEN</strong>
-                    <span>Exakte Summen per SQL berechnen</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-rank-vendors" data-prompt="Zeige die Gesamtbeträge und Anzahl der Rechnungen pro Lieferant" data-prompt-de="Zeige die Gesamtbeträge und Anzahl der Rechnungen pro Lieferant" data-prompt-en="Show total spend and invoice counts by vendor">
+                    <strong data-i18n="qp_tag_vendors">LIEFERANTEN-SALDEN</strong>
+                    <span data-i18n="qp_rank_vendors">Exakte Summen berechnen</span>
                   </button>
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-val-summary" data-prompt="Zeige den Prüfbericht und alle Validierungsfehler für alle Rechnungen">
-                    <strong>PRÜFBERICHT (V1-V9)</strong>
-                    <span>Abweichungen im Chat auflisten</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-val-summary" data-prompt="Zeige den Prüfbericht und alle Validierungsfehler für alle Rechnungen" data-prompt-de="Zeige den Prüfbericht und alle Validierungsfehler für alle Rechnungen" data-prompt-en="Show the validation report and all failed checks">
+                    <strong data-i18n="qp_tag_check">PRÜFBERICHT (V1-V9)</strong>
+                    <span data-i18n="qp_val_summary">Abweichungen im Chat auflisten</span>
                   </button>
-                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-export-unpaid" data-prompt="Erstelle einen Excel-Bericht für alle offenen Rechnungen">
-                    <strong>OFFENE POSTEN (EXCEL)</strong>
-                    <span>Excel-Liste generieren</span>
+                  <button class="quick-prompt-btn quick-prompt-chip" id="btn-dispatch-export-unpaid" data-prompt="Erstelle einen Excel-Bericht für alle offenen Rechnungen" data-prompt-de="Erstelle einen Excel-Bericht für alle offenen Rechnungen" data-prompt-en="Create an Excel report for all open invoices">
+                    <strong data-i18n="qp_tag_excel">OFFENE POSTEN (EXCEL)</strong>
+                    <span data-i18n="qp_export_unpaid">Excel-Liste generieren</span>
                   </button>
                   <button class="quick-prompt-btn" id="btn-dispatch-file-invoice" type="button">
                     <strong>NEUEN BELEG HOCHLADEN</strong>
@@ -644,7 +644,7 @@
                   <circle cx="11" cy="11" r="8"></circle>
                   <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
-                <input type="text" id="ledger-search-input" placeholder="FTS5-Volltextsuche: Rechnungs-Nr., Lieferant, Artikel...">
+                <input type="text" id="ledger-search-input" data-i18n-placeholder="ph_ledger_search" placeholder="Belegsuche: Rechnungs-Nr., Lieferant, Artikel...">
               </div>
 
               <div style="display:flex; align-items:flex-end; gap:1.25rem; flex-wrap:wrap;">
@@ -996,9 +996,9 @@
                 <div class="chat-msg assistant">
                   <div class="chat-avatar">KI</div>
                   <div class="msg-body">
-                    <p><strong>MEMO &bull; KI-ASSISTENT (SQL &amp; FTS5) BEREIT</strong></p>
-                    <p>Ich beantworte Fragen ausschließlich über SQL- und FTS5-Volltextabfragen auf Ihrer SQLite-Datenbank. Alle Summen, Durchschnitte und Preisvergleiche werden exakt in Python über <code>invoice_aggregate</code> berechnet.</p>
-                    <p>Jede genannte Zahl verlinkt direkt auf den zugehörigen Beleg. Sie können mich auch bitten, Rechnungen für DATEV vorzubereiten oder als bezahlt zu markieren (mit menschlicher Freigabe).</p>
+                    <p><strong data-i18n="chat_welcome_hdr">MEMO &bull; KI-ASSISTENT BEREIT</strong></p>
+                    <p data-i18n="chat_welcome_body">Ich bin mit Ihrer Belegdatenbank und dem 9-Stufen-Prüfmodul verbunden. Alle Summen, Durchschnitte und Preisvergleiche werden exakt berechnet.</p>
+                    <p data-i18n="chat_welcome_body2">Jede genannte Zahl verlinkt direkt auf den zugehörigen Beleg. Sie können mich auch bitten, Rechnungen für DATEV vorzubereiten oder als bezahlt zu markieren (mit menschlicher Freigabe).</p>
                   </div>
                 </div>
               </div>
@@ -1382,10 +1382,10 @@
         <div style="margin-bottom:0.95rem;">
           <span style="font-family:var(--font-mono); font-size:0.68rem; color:var(--ink-muted); display:block; margin-bottom:0.4rem;">VORLAGEN:</span>
           <div style="display:flex; flex-wrap:wrap; gap:0.4rem;" id="chart-suggestion-chips">
-            <button type="button" class="chart-template-chip" data-prompt="Top Lieferanten nach Umsatz">Top Lieferanten</button>
-            <button type="button" class="chart-template-chip" data-prompt="Zahlungsstatus bezahlt vs offen">Zahlungsstatus</button>
-            <button type="button" class="chart-template-chip" data-prompt="Rechnungsbeträge im Zeitverlauf nach Datum">Zeitverlauf</button>
-            <button type="button" class="chart-template-chip" data-prompt="Top Positionen und Artikel nach Netto-Volumen">Top Artikel</button>
+            <button type="button" class="chart-template-chip" data-prompt="Top Lieferanten nach Umsatz" data-prompt-de="Top Lieferanten nach Umsatz" data-prompt-en="Top vendors by spend" data-i18n="ct_top_vendors">Top Lieferanten</button>
+            <button type="button" class="chart-template-chip" data-prompt="Zahlungsstatus bezahlt vs offen" data-prompt-de="Zahlungsstatus bezahlt vs offen" data-prompt-en="Payment status paid vs open" data-i18n="ct_payment_status">Zahlungsstatus</button>
+            <button type="button" class="chart-template-chip" data-prompt="Rechnungsbeträge im Zeitverlauf nach Datum" data-prompt-de="Rechnungsbeträge im Zeitverlauf nach Datum" data-prompt-en="Invoice amounts over time by date" data-i18n="ct_timeline">Zeitverlauf</button>
+            <button type="button" class="chart-template-chip" data-prompt="Top Positionen und Artikel nach Netto-Volumen" data-prompt-de="Top Positionen und Artikel nach Netto-Volumen" data-prompt-en="Top line items by net volume" data-i18n="ct_top_items">Top Artikel</button>
           </div>
         </div>
 

@@ -4,7 +4,8 @@
 
 import { api } from "./api.js";
 
-export function initChat({ getSessionContext, setConversationId, showToast, onActionResolved }) {
+export function initChat({ getSessionContext, setConversationId, showToast, onActionResolved, t: translate }) {
+  const t = typeof translate === "function" ? translate : (k) => k;
   const messagesContainer = document.getElementById("chat-messages");
   const textarea = document.getElementById("chat-textarea");
   const btnSend = document.getElementById("btn-chat-send");
@@ -25,18 +26,16 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
       const newId = "conv_" + Math.random().toString(36).substring(2, 10);
       setConversationId(newId);
       clearMessages();
-      appendAssistantMessage(
-        "**MEMO &bull; KI-ASSISTENT BEREIT (SQL & FTS5)**\n\nIch bin direkt mit Ihrer SQLite-Belegdatenbank, dem FTS5-Volltextindex und dem 9-Stufen-Prüfmodul verbunden. Alle Summen und Preisvergleiche werden exakt in Python berechnet, und jede Zahl verlinkt auf den Ursprungsbeleg."
-      );
+      appendAssistantMessage(t("chat_welcome_memo"));
       highlightActiveConversation(newId);
-      showToast("Neue Konversation gestartet", "info");
+      showToast(t("chat_new_conv_toast"), "info");
     });
   }
 
   promptChips.forEach((chip) => {
     chip.addEventListener("click", () => {
       if (isSending) {
-        showToast("KI-Assistent verarbeitet bereits eine Anfrage...", "info");
+        showToast(t("chat_busy_toast"), "info");
         return;
       }
       const prompt = chip.getAttribute("data-prompt") || chip.textContent.trim();
@@ -84,7 +83,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
   function setAttachedFile(file) {
     attachedFile = file;
     if (attachmentPreview && attachmentName) {
-      attachmentName.textContent = `ANHANG: ${file.name} [${(file.size / 1024).toFixed(1)} KB]`;
+      attachmentName.textContent = `${t("chat_attachment_prefix")}: ${file.name} [${(file.size / 1024).toFixed(1)} KB]`;
       attachmentPreview.style.display = "flex";
     }
   }
@@ -104,12 +103,12 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     if (btnSend) btnSend.disabled = true;
     promptChips.forEach((c) => (c.disabled = true));
 
-    const { userId, conversationId } = getSessionContext();
+    const { userId, conversationId, lang } = getSessionContext();
     const currentFile = attachedFile;
 
     let userDisplay = text;
     if (currentFile) {
-      userDisplay += `\n\n*[Angehängter Beleg: ${currentFile.name}]*`;
+      userDisplay += `\n\n*[${t("chat_attached_doc_label")}: ${currentFile.name}]*`;
     }
     appendUserMessage(userDisplay);
 
@@ -119,18 +118,19 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     }
     clearAttachedFile();
 
-    const thinkingId = appendAssistantMessage("Führe SQL/FTS5-Abfrage & Python-Berechnung aus...", true);
+    const thinkingId = appendAssistantMessage(t("chat_thinking_text"), true);
 
     try {
       const res = await api.chat({
-        message: text || "Bitte prüfe diesen Beleg.",
+        message: text || t("chat_default_file_msg"),
         userId,
         conversationId,
         file: currentFile,
+        lang: lang || "de",
       });
 
       removeMessage(thinkingId);
-      appendAssistantMessage(res.response || "Keine Antwort erhalten.");
+      appendAssistantMessage(res.response || t("chat_no_answer"));
 
       if (res.conversation_id && res.conversation_id !== conversationId) {
         setConversationId(res.conversation_id);
@@ -142,8 +142,8 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
       }
     } catch (err) {
       removeMessage(thinkingId);
-      const msg = err.message || "Vorübergehender Fehler bei der Anfrage.";
-      appendAssistantMessage(`**MEMO &bull; SYSTEMHINWEIS**\n\n${msg}`);
+      const msg = err.message || t("chat_transient_err");
+      appendAssistantMessage(`**${t("chat_system_notice_hdr")}**\n\n${msg}`);
       showToast(msg, "error");
     } finally {
       isSending = false;
@@ -164,7 +164,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
       if (convs.length === 0) {
         convListEl.innerHTML = `
           <li style="padding: 1.5rem 1rem; text-align: center; color: var(--ink-muted); font-family: var(--font-mono); font-size: 0.72rem;">
-            [ KEINE ARCHIVIERTEN SITZUNGEN ]
+            [ ${t("chat_no_archived_sessions")} ]
           </li>`;
         return;
       }
@@ -176,7 +176,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
 
         const dateStr = c.updated_at ? new Date(c.updated_at).toLocaleDateString("de-DE") : "";
         li.innerHTML = `
-          <div class="conv-item-title">${escapeHtml(c.title || "Beleg-Anfrage")}</div>
+          <div class="conv-item-title">${escapeHtml(c.title || t("chat_conv_default_title"))}</div>
           <div class="conv-item-date">${dateStr} &bull; ${escapeHtml(c.conversation_id.slice(0, 8))}</div>
         `;
 
@@ -194,7 +194,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     highlightActiveConversation(convId);
 
     clearMessages();
-    const loadingId = appendAssistantMessage("*Lade Gesprächsverlauf aus SQLite...*", true);
+    const loadingId = appendAssistantMessage(t("chat_loading_history"), true);
 
     try {
       const res = await api.getChatHistory(convId, userId, 50);
@@ -202,7 +202,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
 
       const msgs = res.messages || [];
       if (msgs.length === 0) {
-        appendAssistantMessage("**MEMO &bull; LEERE SITZUNG**\n\nNoch keine Nachrichten in dieser Konversation.");
+        appendAssistantMessage(t("chat_empty_session"));
         return;
       }
 
@@ -215,7 +215,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
       });
     } catch (err) {
       removeMessage(loadingId);
-      appendAssistantMessage(`Fehler beim Laden: ${err.message}`);
+      appendAssistantMessage(`${t("chat_load_err")}: ${err.message}`);
     }
   }
 
@@ -235,7 +235,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     const div = document.createElement("div");
     div.className = "chat-msg user";
     div.innerHTML = `
-      <div class="chat-avatar" title="Benutzer">ICH</div>
+      <div class="chat-avatar" title="${escapeHtml(t("chat_user_title"))}">${escapeHtml(t("chat_user_label"))}</div>
       <div class="msg-body">${formatMarkdown(text)}</div>
     `;
     messagesContainer.appendChild(div);
@@ -251,7 +251,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
 
     if (isTemporary) {
       div.innerHTML = `
-        <div class="chat-avatar" title="KI-Assistent">KI</div>
+        <div class="chat-avatar" title="${escapeHtml(t("chat_ai_title"))}">${escapeHtml(t("chat_ai_label"))}</div>
         <div class="msg-body">
           <div class="chat-thinking-container">
             <span class="thinking-pulse-dot"></span>
@@ -265,7 +265,7 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     }
 
     div.innerHTML = `
-      <div class="chat-avatar" title="KI-Assistent">KI</div>
+      <div class="chat-avatar" title="${escapeHtml(t("chat_ai_title"))}">${escapeHtml(t("chat_ai_label"))}</div>
       <div class="msg-body">${formatMarkdown(text)}</div>
     `;
 
@@ -322,18 +322,18 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
     card.style.background = "#FBF4E6";
     card.innerHTML = `
       <div class="report-file-meta">
-        <span class="stamp-badge pending">FREIGABE ERFORDERLICH</span>
+        <span class="stamp-badge pending">${escapeHtml(t("chat_approval_required"))}</span>
         <div class="report-file-info">
-          <strong>Menschliche Bestätigung vor Ausführung</strong>
-          <span>Vorgangs-ID: ${escapeHtml(actionId)}</span>
+          <strong>${escapeHtml(t("chat_human_confirm_title"))}</strong>
+          <span>${escapeHtml(t("chat_action_id_label"))}: ${escapeHtml(actionId)}</span>
         </div>
       </div>
       <div style="display:flex; gap:0.5rem;" id="approval-btns-${escapeHtml(actionId)}">
         <button type="button" class="btn-secondary btn-reject-action" style="font-size:0.74rem; padding:0.35rem 0.7rem;">
-          ABBRECHEN
+          ${escapeHtml(t("chat_btn_reject"))}
         </button>
         <button type="button" class="btn-primary btn-approve-action" style="font-size:0.74rem; padding:0.35rem 0.8rem; background:var(--stamp-green); border-color:var(--stamp-green);">
-          FREIGEBEN & AUSFÜHREN
+          ${escapeHtml(t("chat_btn_approve"))}
         </button>
       </div>
     `;
@@ -349,14 +349,14 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
         const res = await api.resolveCopilotAction(actionId, decision);
         if (btnWrap) {
           const isApproved = res.action_status === "approved";
-          btnWrap.innerHTML = `<span class="stamp-badge ${isApproved ? "paid" : "failed"}">${isApproved ? "FREIGEGEBEN & AUSGEFÜHRT" : "ABGELEHNT"}</span>`;
+          btnWrap.innerHTML = `<span class="stamp-badge ${isApproved ? "paid" : "failed"}">${escapeHtml(isApproved ? t("chat_status_approved") : t("chat_status_rejected"))}</span>`;
         }
-        showToast(res.message || "Vorgang aktualisiert", "success");
+        showToast(res.message || t("chat_action_updated"), "success");
         if (typeof onActionResolved === "function") {
           onActionResolved();
         }
       } catch (err) {
-        showToast(err.message || "Fehler bei der Freigabe", "error");
+        showToast(err.message || t("chat_approval_err"), "error");
         if (btnApprove) btnApprove.disabled = false;
         if (btnReject) btnReject.disabled = false;
       }
@@ -393,12 +393,12 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
           </svg>
         </div>
         <div class="report-file-info">
-          <strong>EXCEL-AUSWERTUNG ERSTELLT</strong>
+          <strong>${escapeHtml(t("chat_excel_created"))}</strong>
           <span>${escapeHtml(filename)}</span>
         </div>
       </div>
       <a href="${downloadUrl}" download="${filename}" class="btn-primary" style="text-decoration:none; padding: 0.35rem 0.75rem; font-size: 0.75rem;">
-        HERUNTERLADEN
+        ${escapeHtml(t("chat_btn_download"))}
       </a>
     `;
     return card;
@@ -417,9 +417,9 @@ export function initChat({ getSessionContext, setConversationId, showToast, onAc
 
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px dashed var(--hairline); padding-bottom: 0.4rem;">
-        <strong style="font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;">DIAGRAMM-AUSWERTUNG</strong>
+        <strong style="font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;">${escapeHtml(t("chat_chart_hdr"))}</strong>
         <a href="${chartUrl}" target="_blank" class="btn-secondary" style="text-decoration:none; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-family: var(--font-mono);">
-          VOLLBILD ↗
+          ${escapeHtml(t("chat_btn_fullscreen"))}
         </a>
       </div>
       <div style="width: 100%; height: 340px; background: #FDFBF5; border: 1px solid var(--hairline); border-radius: 2px; overflow: hidden;">

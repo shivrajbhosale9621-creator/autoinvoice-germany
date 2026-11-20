@@ -85,6 +85,7 @@ from orchestrator import MainOrchestrator, _line_item_rates
 from validator import validate_invoice
 from vies_service import check_vat_vies
 from xrechnung import generate_xrechnung_xml
+from zugferd import generate_zugferd_pdf
 from sepa_generator import (
     validate_iban_checksum,
     preview_payment_run,
@@ -287,6 +288,7 @@ async def chat(
     conversation_id = ""
     idempotency_key = None
     message = ""
+    lang = "de"
     save_path = None
 
     if "multipart/form-data" in ct:
@@ -294,6 +296,8 @@ async def chat(
         message = str(form.get("message") or "").strip()
         conversation_id = str(form.get("conversation_id") or "").strip()
         idempotency_key = str(form.get("idempotency_key") or "").strip() or None
+        raw_lang = str(form.get("lang") or "de").strip().lower()
+        lang = "en" if raw_lang.startswith("en") else "de"
 
         file_obj = form.get("file")
         if file_obj and hasattr(file_obj, "filename") and file_obj.filename:
@@ -316,6 +320,8 @@ async def chat(
         message = str(data.get("message") or "").strip()
         conversation_id = str(data.get("conversation_id") or "").strip()
         idempotency_key = str(data.get("idempotency_key") or "").strip() or None
+        raw_lang = str(data.get("lang") or "de").strip().lower()
+        lang = "en" if raw_lang.startswith("en") else "de"
 
     if not message:
         raise HTTPException(status_code=400, detail="'message' is required and cannot be empty")
@@ -335,6 +341,7 @@ async def chat(
             orch.run,
             user_query=full_message,
             idempotency_key=idempotency_key,
+            lang=lang,
         )
         response_text = _drop_dead_chart_links(response_text)
         return {
@@ -345,7 +352,12 @@ async def chat(
         }
     except Exception as exc:
         logger.error("Chat error conv=%s: %s", conversation_id, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Der KI-Assistent ist momentan ausgelastet. Bitte versuchen Sie es erneut.")
+        err_detail = (
+            "The AI assistant is temporarily busy. Please try again."
+            if lang == "en"
+            else "Der KI-Assistent ist momentan ausgelastet. Bitte versuchen Sie es erneut."
+        )
+        raise HTTPException(status_code=500, detail=err_detail)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -783,6 +795,50 @@ async def download_xrechnung_xml(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task 9 - GET /api/invoice/{doc_id}/zugferd (ZUGFeRD PDF/A-3 Download)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/invoice/{doc_id}/zugferd")
+async def download_zugferd_pdf(
+    doc_id: str,
+    leitweg_id: Optional[str] = Query(None),
+    use_settings_leitweg: bool = Query(False),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Validate invoice with the 9-check gate (FAIL blocks, CANNOT VERIFY warns only)
+    and return a ZUGFeRD / Factur-X PDF with embedded factur-x.xml.
+    """
+    user_id = str(current_user.id)
+    inv = get_invoice_by_identifier(doc_id, user_id=user_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Beleg wurde nicht gefunden.")
+
+    raw_lw = str(leitweg_id if leitweg_id is not None else (inv.get("leitweg_id") or "")).strip()
+    if raw_lw.lower() in ("", "n/a", "na", "none", "null", "-", "unknown", "unbekannt") and use_settings_leitweg:
+        user_cfg = get_user_settings(user_id, CHAT_DB_PATH)
+        raw_lw = str(user_cfg.get("leitweg_id") or "").strip()
+    effective_leitweg = "" if raw_lw.lower() in ("", "n/a", "na", "none", "null", "-", "unknown", "unbekannt") else raw_lw
+
+    try:
+        pdf_bytes, filename, warnings = generate_zugferd_pdf(inv, default_leitweg_id=effective_leitweg)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    warn_codes = ",".join(str(w.get("code") or "") for w in warnings if w.get("code"))
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+    if warn_codes:
+        headers["X-Validation-Warnings"] = warn_codes
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers=headers,
     )
 
 

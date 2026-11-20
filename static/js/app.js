@@ -110,6 +110,74 @@ const I18N = {
     lbl_eur_amounts: "Umgerechnete EUR-Beträge",
     btn_convert_eur: "In EUR umrechnen",
     lbl_suggested_prefix: "Vorschlag:",
+    btn_build_german: "Deutsche Rechnung erstellen",
+    btn_download_zugferd: "ZUGFeRD PDF herunterladen",
+    btn_download_xrechnung: "XRechnung XML (EN 16931) herunterladen",
+    cb_title: "Konvertierungs-Assistent: Deutsche Rechnung (§ 14 UStG)",
+    cb_save_validate: "Speichern & Prüfen (EUR)",
+    cb_cancel: "Schließen",
+    cb_buyer_name: "Käufername (aus Einstellungen)",
+    cb_buyer_address: "Käuferanschrift",
+    cb_buyer_vat: "Käufer USt-IdNr.",
+    cb_leitweg_id: "Leitweg-ID (BT-10)",
+    cb_orig_vs_eur: "Originalbeträge vs. EUR-Werte",
+    cb_saved_msg: "Deutsche Rechnung gespeichert, EUR-Summen neu berechnet und geprüft.",
+    zugferd_blocked_prefix: "ZUGFeRD-Erstellung blockiert",
+    zugferd_warning_prefix: "Prüfhinweis (nicht blockierend)",
+    zugferd_downloaded: "ZUGFeRD PDF für Beleg heruntergeladen:",
+    chat_welcome_hdr: "MEMO • KI-ASSISTENT BEREIT",
+    chat_welcome_body: "Ich bin mit Ihrer Belegdatenbank und dem 9-Stufen-Prüfmodul verbunden. Alle Summen, Durchschnitte und Preisvergleiche werden exakt berechnet.",
+    chat_welcome_body2: "Jede genannte Zahl verlinkt direkt auf den zugehörigen Beleg. Sie können mich auch bitten, Rechnungen für DATEV vorzubereiten oder als bezahlt zu markieren (mit menschlicher Freigabe).",
+    qp_rank_vendors: "Lieferanten nach Umsatz & offenen Posten auswerten",
+    qp_tag_vendors: "LIEFERANTEN-SALDEN",
+    qp_tag_check: "PRÜFBERICHT (V1-V9)",
+    qp_tag_excel: "OFFENE POSTEN (EXCEL)",
+    qp_val_summary: "9-Stufen-Prüfbericht & Prüffehler anzeigen",
+    qp_export_unpaid: "Excel-Auswertung offener Rechnungen erstellen",
+    ph_ledger_search: "Belegsuche: Rechnungs-Nr., Lieferant, Artikel...",
+    ct_top_vendors: "Top Lieferanten",
+    ct_payment_status: "Zahlungsstatus",
+    ct_timeline: "Zeitverlauf",
+    ct_top_items: "Top Artikel",
+    up_skip_prefix: "Übersprungen",
+    up_bad_type: "Nicht unterstützter Dateityp",
+    up_too_large: "Datei größer als 20 MB.",
+    up_duration: "DAUER",
+    up_processing: "Verarbeite Beleg",
+    up_done_in: "ABGESCHLOSSEN IN",
+    up_extracted_ok: "Beleg extrahiert & geprüft:",
+    chat_welcome_memo: "**MEMO &bull; KI-ASSISTENT BEREIT**\n\nIch bin mit Ihrer Belegdatenbank und dem 9-Stufen-Prüfmodul verbunden. Alle Summen und Preisvergleiche werden exakt berechnet, und jede Zahl verlinkt auf den Ursprungsbeleg.",
+    chat_new_conv_toast: "Neue Konversation gestartet",
+    chat_busy_toast: "KI-Assistent verarbeitet bereits eine Anfrage...",
+    chat_attachment_prefix: "ANHANG",
+    chat_attached_doc_label: "Angehängter Beleg",
+    chat_thinking_text: "Abfrage & Berechnung läuft...",
+    chat_default_file_msg: "Bitte prüfe diesen Beleg.",
+    chat_no_answer: "Keine Antwort erhalten.",
+    chat_transient_err: "Vorübergehender Fehler bei der Anfrage.",
+    chat_system_notice_hdr: "MEMO &bull; SYSTEMHINWEIS",
+    chat_no_archived_sessions: "KEINE ARCHIVIERTEN SITZUNGEN",
+    chat_conv_default_title: "Beleg-Anfrage",
+    chat_loading_history: "*Lade Gesprächsverlauf...*",
+    chat_empty_session: "**MEMO &bull; LEERE SITZUNG**\n\nNoch keine Nachrichten in dieser Konversation.",
+    chat_load_err: "Fehler beim Laden",
+    chat_user_title: "Benutzer",
+    chat_user_label: "ICH",
+    chat_ai_title: "KI-Assistent",
+    chat_ai_label: "KI",
+    chat_approval_required: "FREIGABE ERFORDERLICH",
+    chat_human_confirm_title: "Menschliche Bestätigung vor Ausführung",
+    chat_action_id_label: "Vorgangs-ID",
+    chat_btn_reject: "ABBRECHEN",
+    chat_btn_approve: "FREIGEBEN & AUSFÜHREN",
+    chat_status_approved: "FREIGEGEBEN & AUSGEFÜHRT",
+    chat_status_rejected: "ABGELEHNT",
+    chat_action_updated: "Vorgang aktualisiert",
+    chat_approval_err: "Fehler bei der Freigabe",
+    chat_excel_created: "EXCEL-AUSWERTUNG ERSTELLT",
+    chat_btn_download: "HERUNTERLADEN",
+    chat_chart_hdr: "DIAGRAMM-AUSWERTUNG",
+    chat_btn_fullscreen: "VOLLBILD ↗",
   },
   en: {
     brand_sub: "DATEV • XRECHNUNG",
@@ -199,6 +267,74 @@ const I18N = {
     lbl_eur_amounts: "Converted EUR amounts",
     btn_convert_eur: "Convert to EUR",
     lbl_suggested_prefix: "Suggested:",
+    btn_build_german: "Build German invoice",
+    btn_download_zugferd: "Download ZUGFeRD PDF",
+    btn_download_xrechnung: "Download XRechnung XML (EN 16931)",
+    cb_title: "Conversion Builder: German Invoice (Sec. 14 UStG)",
+    cb_save_validate: "Save & Validate (EUR)",
+    cb_cancel: "Close",
+    cb_buyer_name: "Buyer name (from Settings)",
+    cb_buyer_address: "Buyer address",
+    cb_buyer_vat: "Buyer VAT ID",
+    cb_leitweg_id: "Leitweg-ID (BT-10)",
+    cb_orig_vs_eur: "Original amounts vs. EUR values",
+    cb_saved_msg: "German invoice saved, EUR totals recomputed and validated.",
+    zugferd_blocked_prefix: "ZUGFeRD generation blocked",
+    zugferd_warning_prefix: "Validation warning (non-blocking)",
+    zugferd_downloaded: "Downloaded ZUGFeRD PDF for invoice:",
+    chat_welcome_hdr: "MEMO • AI ASSISTANT READY",
+    chat_welcome_body: "I am connected to your invoice database and 9-step validation module. All totals, averages, and price comparisons are computed deterministically.",
+    chat_welcome_body2: "Every figure links directly to the source invoice. You can also ask me to prepare invoices for DATEV or mark them as paid (with human approval).",
+    qp_rank_vendors: "Analyze vendors by spend & open items",
+    qp_tag_vendors: "VENDOR BALANCES",
+    qp_tag_check: "VALIDATION (V1-V9)",
+    qp_tag_excel: "OPEN ITEMS (EXCEL)",
+    qp_val_summary: "Show 9-step validation report & failures",
+    qp_export_unpaid: "Create Excel report for open invoices",
+    ph_ledger_search: "Search invoices: invoice #, vendor, item...",
+    ct_top_vendors: "Top vendors",
+    ct_payment_status: "Payment status",
+    ct_timeline: "Timeline",
+    ct_top_items: "Top items",
+    up_skip_prefix: "Skipped",
+    up_bad_type: "Unsupported file type",
+    up_too_large: "File exceeds 20 MB.",
+    up_duration: "DURATION",
+    up_processing: "Processing invoice",
+    up_done_in: "COMPLETED IN",
+    up_extracted_ok: "Invoice extracted & validated:",
+    chat_welcome_memo: "**MEMO &bull; AI ASSISTANT READY**\n\nI am connected to your invoice database and 9-step validation module. All totals and price comparisons are computed deterministically, and every figure links back to the source invoice.",
+    chat_new_conv_toast: "Started a new conversation",
+    chat_busy_toast: "AI assistant is already processing a request...",
+    chat_attachment_prefix: "ATTACHMENT",
+    chat_attached_doc_label: "Attached document",
+    chat_thinking_text: "Running query & calculation...",
+    chat_default_file_msg: "Please check this invoice.",
+    chat_no_answer: "No answer received.",
+    chat_transient_err: "Temporary error while processing the request.",
+    chat_system_notice_hdr: "MEMO &bull; SYSTEM NOTICE",
+    chat_no_archived_sessions: "NO ARCHIVED SESSIONS",
+    chat_conv_default_title: "Invoice query",
+    chat_loading_history: "*Loading conversation history...*",
+    chat_empty_session: "**MEMO &bull; EMPTY SESSION**\n\nNo messages in this conversation yet.",
+    chat_load_err: "Error loading",
+    chat_user_title: "User",
+    chat_user_label: "YOU",
+    chat_ai_title: "AI assistant",
+    chat_ai_label: "AI",
+    chat_approval_required: "APPROVAL REQUIRED",
+    chat_human_confirm_title: "Human confirmation before execution",
+    chat_action_id_label: "Action ID",
+    chat_btn_reject: "CANCEL",
+    chat_btn_approve: "APPROVE & EXECUTE",
+    chat_status_approved: "APPROVED & EXECUTED",
+    chat_status_rejected: "REJECTED",
+    chat_action_updated: "Action updated",
+    chat_approval_err: "Approval failed",
+    chat_excel_created: "EXCEL REPORT CREATED",
+    chat_btn_download: "DOWNLOAD",
+    chat_chart_hdr: "CHART ANALYSIS",
+    chat_btn_fullscreen: "FULLSCREEN ↗",
   },
 };
 
@@ -253,6 +389,16 @@ export function applyLanguage(lang) {
     if (k) el.textContent = t(k);
   });
 
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const k = el.getAttribute("data-i18n-placeholder");
+    if (k) el.setAttribute("placeholder", t(k));
+  });
+
+  document.querySelectorAll("[data-prompt-de][data-prompt-en]").forEach((el) => {
+    const promptVal = state.lang === "en" ? el.getAttribute("data-prompt-en") : el.getAttribute("data-prompt-de");
+    if (promptVal) el.setAttribute("data-prompt", promptVal);
+  });
+
   const langBtn = document.getElementById("btn-lang-toggle");
   if (langBtn) {
     langBtn.innerHTML = state.lang === "de" ? "<strong>DE</strong> | EN" : "DE | <strong>EN</strong>";
@@ -268,6 +414,7 @@ function getSessionContext() {
   return {
     userId: state.user ? state.user.id : state.userId,
     conversationId: state.conversationId,
+    lang: state.lang,
   };
 }
 
@@ -323,6 +470,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     onUploadSuccess: refreshData,
     getSessionContext,
     showToast,
+    t,
   });
 
   window.chatController = initChat({
@@ -330,6 +478,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setConversationId,
     showToast,
     onActionResolved: refreshData,
+    t,
   });
 
   await checkAuthSession();
@@ -1359,14 +1508,129 @@ function renderInvoiceDetailView(inv) {
         <button type="button" class="btn-secondary" id="btn-detail-fill-leitweg" style="font-size:0.75rem;">
           Standard-Leitweg-ID übernehmen
         </button>
-        <button type="button" class="btn-secondary" id="btn-detail-download-xrechnung" style="font-size:0.75rem; border-color:var(--stamp-green); color:var(--stamp-green);">
-          XRechnung XML (EN 16931) herunterladen
-        </button>
+        ${(inv.source_currency || "EUR").toUpperCase() !== "EUR" ? `
+          <button type="button" class="btn-secondary" id="btn-detail-build-german" style="font-size:0.75rem; border-color:var(--ink);">
+            ${t("btn_build_german")}
+          </button>
+          <button type="button" class="btn-primary" id="btn-detail-download-zugferd" style="font-size:0.75rem; background:var(--stamp-green); border-color:var(--stamp-green);">
+            ${t("btn_download_zugferd")}
+          </button>
+          <button type="button" class="btn-secondary" id="btn-detail-download-xrechnung" style="font-size:0.75rem;">
+            ${t("btn_download_xrechnung")}
+          </button>
+        ` : `
+          <button type="button" class="btn-secondary" id="btn-detail-download-xrechnung" style="font-size:0.75rem; border-color:var(--stamp-green); color:var(--stamp-green);">
+            ${t("btn_download_xrechnung")}
+          </button>
+        `}
         <button type="button" class="btn-primary" id="btn-detail-save" style="font-size:0.75rem;">
           ÄNDERUNGEN SPEICHERN
         </button>
       </div>
     </div>
+
+    ${(() => {
+      const nonBlockingWarns = checks.filter((c) => c.status === "CANNOT VERIFY" || c.status === "WARN" || c.status === "WARNING");
+      if (!nonBlockingWarns.length) return "";
+      return `
+        <div style="border:1px solid var(--stamp-amber); background:#FBF4E6; padding:0.7rem 0.9rem; margin-bottom:1rem; font-size:0.8rem;">
+          <strong>${t("zugferd_warning_prefix")}:</strong>
+          ${nonBlockingWarns.map((w) => `<span style="font-family:var(--font-mono); margin-left:0.5rem;">${escapeHtml(w.code)} (${escapeHtml(w.status)}): ${escapeHtml(w.message)}</span>`).join(" | ")}
+        </div>
+      `;
+    })()}
+
+    ${(() => {
+      const srcCcy = (inv.source_currency || inv.currency || "EUR").toUpperCase();
+      if (srcCcy === "EUR") return "";
+      const cbBuyerName = inv.buyer_name || state.settings?.company_name || "";
+      const cbBuyerAddr = inv.buyer_address || state.settings?.company_address || "";
+      const cbBuyerVat = inv.buyer_vat_id || state.settings?.vat_id || "";
+      const cbLeitweg = inv.leitweg_id || state.settings?.leitweg_id || "";
+      const cbTt = inv.tax_treatment || suggestTaxTreatmentJS(inv.supplier_country);
+      const fxRate = Number(inv.fx_rate || 1.0);
+      const cbItemsHtml = items.map((it, idx) => {
+        const up = Number(it.unit_price ?? it.rate ?? 0);
+        const qty = Number(it.quantity ?? it.qty ?? 1);
+        const pu = Number(it.price_unit ?? 1) || 1;
+        const disc = Number(it.discount_percent ?? it.discount ?? 0);
+        const lt = Number(it.line_total ?? it.total ?? (qty * up / pu * (1 - disc / 100)));
+        const vatR = Number(it.vat_rate ?? (cbTt === "standard" ? 19 : 0));
+        return `
+          <tr class="cb-line-row" data-idx="${idx}">
+            <td><input type="text" class="detail-input cb-desc" value="${escapeHtml(it.description || it.name || "")}" style="min-width:190px;"></td>
+            <td><input type="text" inputmode="decimal" class="detail-input cb-qty" value="${qty}" style="width:65px; text-align:right;"></td>
+            <td><input type="text" class="detail-input cb-unit" value="${escapeHtml(it.unit || "Stk")}" style="width:52px;"></td>
+            <td><input type="text" inputmode="decimal" class="detail-input cb-pe" value="${pu}" style="width:52px; text-align:right;"></td>
+            <td><input type="text" inputmode="decimal" class="detail-input cb-price" value="${up.toFixed(2)}" style="width:88px; text-align:right;"></td>
+            <td><input type="text" inputmode="decimal" class="detail-input cb-disc" value="${disc}" style="width:58px; text-align:right;"></td>
+            <td><input type="text" inputmode="decimal" class="detail-input cb-vat" value="${vatR}" style="width:58px; text-align:right;"></td>
+            <td class="mono-amount">${formatMoneyDE(lt)}</td>
+          </tr>
+        `;
+      }).join("");
+      return `
+        <div id="german-conversion-builder" style="display:none; border:2px solid var(--ink); background:var(--paper-card); padding:1rem; margin-bottom:1.25rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+            <h3 class="settings-section-heading" style="margin:0; border:none;">${t("cb_title")}</h3>
+            <button type="button" class="btn-secondary" id="btn-cb-close" style="font-size:0.72rem; padding:0.25rem 0.6rem;">${t("cb_cancel")}</button>
+          </div>
+          <div class="field-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:0.85rem;">
+            <div class="field-item">
+              <div class="field-label">${t("cb_buyer_name")}</div>
+              <input type="text" id="cb-buyer-name" class="detail-input" value="${escapeHtml(cbBuyerName)}">
+            </div>
+            <div class="field-item">
+              <div class="field-label">${t("cb_buyer_address")}</div>
+              <input type="text" id="cb-buyer-address" class="detail-input" value="${escapeHtml(cbBuyerAddr)}">
+            </div>
+            <div class="field-item">
+              <div class="field-label">${t("cb_buyer_vat")}</div>
+              <input type="text" id="cb-buyer-vat" class="detail-input" value="${escapeHtml(cbBuyerVat)}">
+            </div>
+            <div class="field-item">
+              <div class="field-label">${t("cb_leitweg_id")}</div>
+              <input type="text" id="cb-leitweg-id" class="detail-input" value="${escapeHtml(cbLeitweg)}" placeholder="04011000-1234512345-06">
+            </div>
+            <div class="field-item" style="grid-column: span 2;">
+              <div class="field-label">${t("lbl_tax_treatment")}</div>
+              <select id="cb-tax-treatment" class="detail-input">
+                <option value="standard" ${cbTt === "standard" ? "selected" : ""}>${t("tt_standard")}</option>
+                <option value="reverse_charge_13b" ${cbTt === "reverse_charge_13b" ? "selected" : ""}>${t("tt_reverse_charge")}</option>
+                <option value="import_no_vat" ${cbTt === "import_no_vat" ? "selected" : ""}>${t("tt_import_no_vat")}</option>
+              </select>
+            </div>
+            <div class="field-item" style="grid-column: span 2;">
+              <div class="field-label">${t("cb_orig_vs_eur")} (FX: ${fxRate.toFixed(4)} ${escapeHtml(srcCcy)}/EUR)</div>
+              <div style="font-family:var(--font-mono); font-size:0.78rem; padding-top:4px;">
+                ${formatNumberDE(inv.original_net || 0)} / ${formatNumberDE(inv.original_vat || 0)} / ${formatNumberDE(inv.original_gross || 0)} ${escapeHtml(srcCcy)}
+                &rarr; <strong>${formatMoneyDE(inv.subtotal)} / ${formatMoneyDE(inv.tax_amount)} / ${formatMoneyDE(inv.total_amount)}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="data-table-wrapper" style="margin-bottom:0.85rem;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>BEZEICHNUNG</th>
+                  <th class="th-amount">MENGE</th>
+                  <th>ME</th>
+                  <th class="th-amount">PE</th>
+                  <th class="th-amount">EINZELPREIS (EUR)</th>
+                  <th class="th-amount">RAB. %</th>
+                  <th class="th-amount">UST %</th>
+                  <th class="th-amount">GESAMT (EUR)</th>
+                </tr>
+              </thead>
+              <tbody>${cbItemsHtml}</tbody>
+            </table>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:0.6rem;">
+            <button type="button" class="btn-primary" id="btn-cb-save-build" style="font-size:0.75rem;">${t("cb_save_validate")}</button>
+          </div>
+        </div>
+      `;
+    })()}
 
     <!-- Header Fields Grid -->
     <div class="field-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:1.25rem;">
@@ -1647,6 +1911,88 @@ function renderInvoiceDetailView(inv) {
     }
     if (lwInput) lwInput.value = defaultLw;
     await saveInvoiceDetailChanges(docId);
+  });
+
+  document.getElementById("btn-detail-build-german")?.addEventListener("click", () => {
+    const panel = document.getElementById("german-conversion-builder");
+    if (panel) {
+      panel.style.display = panel.style.display === "none" ? "block" : "none";
+    }
+  });
+
+  document.getElementById("btn-cb-close")?.addEventListener("click", () => {
+    const panel = document.getElementById("german-conversion-builder");
+    if (panel) panel.style.display = "none";
+  });
+
+  document.getElementById("btn-cb-save-build")?.addEventListener("click", async () => {
+    try {
+      const cbRows = Array.from(document.querySelectorAll(".cb-line-row"));
+      const cbItems = cbRows.map((tr, idx) => {
+        const origItem = items[idx] || {};
+        return {
+          ...origItem,
+          pos: String(origItem.pos || idx + 1),
+          description: tr.querySelector(".cb-desc")?.value.trim() || origItem.description || "",
+          quantity: parseGermanDecimal(tr.querySelector(".cb-qty")?.value) ?? 1,
+          unit: tr.querySelector(".cb-unit")?.value.trim() || "Stk",
+          price_unit: parseGermanDecimal(tr.querySelector(".cb-pe")?.value) ?? 1,
+          unit_price: parseGermanDecimal(tr.querySelector(".cb-price")?.value) ?? 0,
+          discount_percent: parseGermanDecimal(tr.querySelector(".cb-disc")?.value) ?? 0,
+          vat_rate: parseGermanDecimal(tr.querySelector(".cb-vat")?.value) ?? 0,
+        };
+      });
+      const payload = {
+        buyer_name: document.getElementById("cb-buyer-name")?.value.trim() || "",
+        buyer_address: document.getElementById("cb-buyer-address")?.value.trim() || "",
+        buyer_vat_id: document.getElementById("cb-buyer-vat")?.value.trim() || "",
+        leitweg_id: document.getElementById("cb-leitweg-id")?.value.trim() || "",
+        tax_treatment: document.getElementById("cb-tax-treatment")?.value || "standard",
+        currency: "EUR",
+        line_items: cbItems,
+        recompute_from_lines: true,
+      };
+      const res = await api.updateInvoice(docId, payload);
+      state.currentDetailInvoice = res.invoice;
+      renderInvoiceDetailView(res.invoice);
+      await refreshData();
+      showToast(t("cb_saved_msg"), "success");
+    } catch (err) {
+      showToast(err.message || "Error", "error");
+    }
+  });
+
+  document.getElementById("btn-detail-download-zugferd")?.addEventListener("click", async () => {
+    const lwVal = document.getElementById("dt-leitweg-id")?.value.trim() || inv.leitweg_id || "";
+    if (lwVal && lwVal !== inv.leitweg_id) {
+      await saveInvoiceDetailChanges(docId);
+    }
+    const url = api.getZugferdDownloadUrl(docId, lwVal, false);
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        showToast(`${t("zugferd_blocked_prefix")}: ${errData.detail || res.statusText}`, "error");
+        return;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${(inv.invoice_number || "Rechnung").replace(/[^A-Za-z0-9_.-]/g, "_")}_ZUGFeRD.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+      const warnHdr = res.headers.get("X-Validation-Warnings");
+      if (warnHdr) {
+        showToast(`${t("zugferd_downloaded")} ${inv.invoice_number} (${t("zugferd_warning_prefix")}: ${warnHdr})`, "info");
+      } else {
+        showToast(`${t("zugferd_downloaded")} ${inv.invoice_number}`, "success");
+      }
+    } catch (err) {
+      showToast(err.message || "Download failed", "error");
+    }
   });
 
   document.getElementById("btn-detail-download-xrechnung")?.addEventListener("click", async () => {
