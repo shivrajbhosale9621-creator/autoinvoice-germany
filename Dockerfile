@@ -41,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/api/health || exit 1
 
 # Launch FastAPI app with Uvicorn respecting $PORT injected by Cloud Run
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+CMD sh -c "python seed_demo_accounts.py && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"
